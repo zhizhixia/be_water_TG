@@ -208,7 +208,3 @@ pytest tests/ -v
 ## 📄 License / 许可
 
 MIT License
-
----
-
-**Made with ⚡ by Sisyphus**
