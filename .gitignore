@@ -1,0 +1,25 @@
+# Secrets
+.env
+*.session
+*.session-journal
+
+# Python
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Internal tooling
+.sisyphus/
+
+# IDE
+.vscode/
+.idea/
+
+# Temp / garbage
+poc_*
+*_output.txt
+be_water_TG/
+
+# OS
+.DS_Store
+Thumbs.db
