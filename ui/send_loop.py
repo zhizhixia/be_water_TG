@@ -4,7 +4,7 @@ import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import flet as ft
 from telethon.errors import FloodWaitError, RPCError
@@ -13,6 +13,9 @@ from src.config import Settings
 from src.interval import get_random_interval
 from src.sender import TelegramSender
 from ui.message_manager import MessageManager
+
+if TYPE_CHECKING:
+    from ui.status_panel import StatusPanel
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +45,7 @@ async def send_loop(
     settings: Settings,
     state: SendState,
     message_manager: MessageManager,
+    status_panel: "StatusPanel | None" = None,
 ) -> None:
     """多群组异步发送主循环。
 
@@ -60,6 +64,7 @@ async def send_loop(
         settings: 项目配置（包含 target_groups、间隔等）。
         state: 共享的发送状态（外部读写 stopped/paused，内部写入计数器）。
         message_manager: 每群组独立的消息选择器管理器。
+        status_panel: 可选的 StatusPanel 实例，用于更新计数器和倒计时 UI。
     """
 
     # 初始化每群组计数器（保留已有值，避免重置）
@@ -103,6 +108,11 @@ async def send_loop(
                         state.total_count,
                     )
                     sent = True
+                    if status_panel:
+                        try:
+                            status_panel.update_counter(state.total_count, state.per_group_counts)
+                        except Exception:
+                            pass
                     break
                 except FloodWaitError as e:
                     logger.warning("⚠️ FloodWait %ds，等待中...", e.seconds)
@@ -162,5 +172,10 @@ async def send_loop(
             while elapsed < interval and not state.stopped:
                 await asyncio.sleep(1)
                 elapsed += 1
+                if status_panel:
+                    try:
+                        status_panel.update_countdown(interval - elapsed)
+                    except Exception:
+                        pass
 
     logger.info("发送循环已退出 (总计发送: %d)", state.total_count)

@@ -150,7 +150,7 @@ async def main(page: ft.Page):
 
         # 6. 运行发送循环 (阻塞直到停止)
         try:
-            await send_loop(page, sender, settings, state, message_manager)
+            await send_loop(page, sender, settings, state, message_manager, status_panel=status_panel)
         except Exception as ex:
             status_panel.add_log("error", f"发送循环异常: {ex}")
         finally:
