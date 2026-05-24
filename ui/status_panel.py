@@ -7,6 +7,8 @@ from datetime import datetime
 
 import flet as ft
 
+from src.interval import format_duration
+
 
 class GUIHandler(logging.Handler):
     """Custom logging handler that routes log records to a StatusPanel."""
@@ -37,6 +39,10 @@ class StatusPanel:
     def __init__(self, page: ft.Page) -> None:
         self.page = page
         self.log_entries: list[str] = []
+
+        # ── 计数器和倒计时显示 ──
+        self.counter_text = ft.Text("", size=14, weight=ft.FontWeight.BOLD, color=ft.Colors.BLUE_200)
+        self.countdown_text = ft.Text("", size=13, color=ft.Colors.ORANGE_200)
 
         # ── 终端输出区域 (只读, 自动滚动) ──
         self.log_output = ft.TextField(
@@ -80,6 +86,8 @@ class StatusPanel:
         return ft.Column(
             [
                 ft.Text("📋 运行日志", size=16, weight=ft.FontWeight.BOLD),
+                self.counter_text,
+                self.countdown_text,
                 ft.Container(
                     content=self.log_output,
                     bgcolor=ft.Colors.BLACK_12,
@@ -118,6 +126,46 @@ class StatusPanel:
         except Exception:
             pass
 
+    def update_counter(self, total: int, per_group: dict[str, int]) -> None:
+        """更新发送计数显示。
+
+        Args:
+            total: 总发送条数。
+            per_group: 各群组发送条数映射，key 为群组链接。
+        """
+        lines = [f"已发送 {total} 条"]
+        if per_group:
+            # 提取群组链接最后一段作为显示名
+            parts = []
+            for link, count in per_group.items():
+                # 从链接中提取最后一段作为群组名
+                name = link.rstrip("/").split("/")[-1]
+                if name.startswith("@"):
+                    name = name[1:]
+                parts.append(f"{name}: {count}条")
+            lines.append(", ".join(parts))
+        self.counter_text.value = "\n".join(lines)
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
+    def update_countdown(self, seconds: int) -> None:
+        """更新倒计时显示。
+
+        Args:
+            seconds: 剩余秒数，0 时清空显示。
+        """
+        if seconds <= 0:
+            self.countdown_text.value = ""
+        else:
+            formatted = format_duration(seconds)
+            self.countdown_text.value = f"下一轮在 {formatted} 后开始"
+        try:
+            self.page.update()
+        except Exception:
+            pass
+
     # ── 验证码输入 ──────────────────────────────────────────────
 
     async def prompt_code(self) -> str:
@@ -130,6 +178,7 @@ class StatusPanel:
         self._code_waiting_text.visible = True
         self.code_input.visible = True
         self.code_input.value = ""
+        self.code_input.border_color = ft.Colors.BLUE_400
         self.code_input.focus()
         self.page.update()
 
@@ -137,13 +186,16 @@ class StatusPanel:
         try:
             code = await self._code_future
             return code
+        except asyncio.CancelledError:
+            return ""
         finally:
             self._code_waiting_text.visible = False
             self.code_input.visible = False
+            self.code_input.border_color = None
             self._code_future = None
             self.page.update()
 
     def _on_code_submit(self, e: ft.ControlEvent) -> None:
         """用户按下回车提交验证码。"""
         if self._code_future and not self._code_future.done():
-            self._code_future.set_result(self.code_input.value or "")
+            self._code_future.set_result((self.code_input.value or "").strip())

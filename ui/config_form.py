@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import flet as ft
 
 from src.config import Settings, load_settings, save_settings
@@ -110,6 +112,16 @@ class ConfigForm:
         """根据 target_groups 输入重建消息文件路径输入行。保留已有值。"""
         groups = parse_group_links(self.target_groups.value or "")
         self._group_file_column.controls.clear()
+        if not groups:
+            self._group_file_column.controls.append(
+                ft.Text(
+                    "输入目标群组链接后，此处将自动显示消息文件路径输入框",
+                    size=12,
+                    color=ft.Colors.GREY_400,
+                    italic=True,
+                )
+            )
+            return
         new_fields: dict[str, ft.TextField] = {}
         for group in groups:
             display_name = group.split("/")[-1][:20]
@@ -217,6 +229,14 @@ class ConfigForm:
 
             self.status.value = "✅ 配置已加载"
             self.status.color = ft.Colors.GREEN
+            self.page.update()
+            try:
+                await asyncio.sleep(3)
+                self.status.value = ""
+                self.page.update()
+            except Exception:
+                pass
+            return
         except Exception as ex:
             self.status.value = f"❌ 加载失败: {ex}"
             self.status.color = ft.Colors.RED
@@ -277,6 +297,14 @@ class ConfigForm:
             save_settings(s)
             self.status.value = "✅ 配置已保存到 .env"
             self.status.color = ft.Colors.GREEN
+            self.page.update()
+            try:
+                await asyncio.sleep(3)
+                self.status.value = ""
+                self.page.update()
+            except Exception:
+                pass
+            return
         except Exception as ex:
             self.status.value = f"❌ 保存失败: {ex}"
             self.status.color = ft.Colors.RED

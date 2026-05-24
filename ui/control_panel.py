@@ -63,6 +63,7 @@ class ControlPanel:
             visible=False,
         )
         self.status_text = ft.Text("就绪", size=14)
+        self.retry_status = ft.Text("", size=12, color=ft.Colors.ORANGE_200, visible=False)
 
     # ── 构建 UI ──────────────────────────────────────────────────
 
@@ -75,6 +76,7 @@ class ControlPanel:
                 self.resume_btn,
                 self.stop_btn,
                 self.status_text,
+                self.retry_status,
             ],
             alignment=ft.MainAxisAlignment.CENTER,
             spacing=12,
@@ -145,5 +147,34 @@ class ControlPanel:
         self.set_state(AppState.RUNNING)
 
     def _on_stop(self, e: ft.ControlEvent) -> None:
-        """点击"停止"：任意运行态 → IDLE。"""
-        self.set_state(AppState.IDLE)
+        """点击"停止"：弹出确认对话框，确认后任意运行态 → IDLE。"""
+
+        def confirm_stop(e: ft.ControlEvent):
+            self.page.close(alert)
+            self.set_state(AppState.IDLE)
+
+        def cancel_stop(e: ft.ControlEvent):
+            self.page.close(alert)
+
+        alert = ft.AlertDialog(
+            title=ft.Text("确认停止"),
+            content=ft.Text("确定要停止发送吗？"),
+            actions=[
+                ft.TextButton("取消", on_click=cancel_stop),
+                ft.TextButton(
+                    "确定停止",
+                    on_click=confirm_stop,
+                    style=ft.ButtonStyle(color=ft.Colors.RED),
+                ),
+            ],
+        )
+        self.page.open(alert)
+
+    def set_retry_status(self, text: str) -> None:
+        """设置重试状态提示文本，空字符串则隐藏。"""
+        self.retry_status.value = text
+        self.retry_status.visible = bool(text)
+        try:
+            self.page.update()
+        except Exception:
+            pass
