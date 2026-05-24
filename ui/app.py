@@ -25,10 +25,28 @@ async def main(page: ft.Page):
     state = SendState()
     send_task_active = False  # 防重复启动
 
+    # ── 控制面板 → 发送状态 桥接 ──
+    def on_state_changed(new_state: AppState):
+        nonlocal send_task_active
+
+        if new_state == AppState.RUNNING:
+            state.paused = False
+            if not send_task_active:
+                send_task_active = True
+                state.stopped = False
+                page.run_task(start_sending)
+        elif new_state == AppState.PAUSING:
+            state.paused = True
+        elif new_state == AppState.PAUSED:
+            state.paused = True
+        elif new_state == AppState.IDLE:
+            state.stopped = True
+            state.paused = False
+
     # ── UI 组件 ──
     config_form = ConfigForm(page)
     status_panel = StatusPanel(page)
-    control_panel = ControlPanel(page)
+    control_panel = ControlPanel(page, state_changed_callback=on_state_changed)
 
     # 将日志输出接入 GUI
     status_panel.attach_root_logger()
@@ -36,7 +54,7 @@ async def main(page: ft.Page):
     # Top: Title bar
     title = ft.Container(
         content=ft.Text("Telegram 灌水工具", size=28, weight=ft.FontWeight.BOLD),
-        padding=ft.padding.only(bottom=16),
+        padding=ft.padding.Padding.only(bottom=16),
     )
 
     # Left: Config form
@@ -127,6 +145,9 @@ async def main(page: ft.Page):
         state.per_group_counts.clear()
         page.update()
 
+        # 5.5 设置暂停回调（send_loop 完成当前轮次后触发）
+        state.on_paused_callback = lambda: control_panel.set_state(AppState.PAUSED)
+
         # 6. 运行发送循环 (阻塞直到停止)
         try:
             await send_loop(page, sender, settings, state, message_manager)
@@ -140,26 +161,6 @@ async def main(page: ft.Page):
             status_panel.add_log("info", "发送已停止")
             control_panel.set_state(AppState.IDLE)
             send_task_active = False
-
-    # ── 控制面板 → 发送状态 桥接 ──
-    def on_state_changed(new_state: AppState):
-        nonlocal send_task_active
-
-        if new_state == AppState.RUNNING:
-            state.paused = False
-            if not send_task_active:
-                send_task_active = True
-                state.stopped = False
-                page.run_task(start_sending)
-        elif new_state == AppState.PAUSING:
-            state.paused = True
-        elif new_state == AppState.PAUSED:
-            state.paused = True
-        elif new_state == AppState.IDLE:
-            state.stopped = True
-            state.paused = False
-
-    control_panel._on_state_changed = on_state_changed
 
     # ── 窗口关闭 ──
     async def on_window_close(e):
