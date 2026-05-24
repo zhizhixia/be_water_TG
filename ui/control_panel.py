@@ -88,9 +88,13 @@ class ControlPanel:
         外部代码（如 send_loop 完成当前轮次后）可调用此方法
         将 PAUSING 推进到 PAUSED。
         """
+        old_state = self.current_state
         self.current_state = new_state
         self._update_buttons()
-        if self._on_state_changed:
+        # PAUSING → PAUSED 不触发回调（避免重复暂停信号）
+        if self._on_state_changed and not (
+            old_state == AppState.PAUSING and new_state == AppState.PAUSED
+        ):
             self._on_state_changed(new_state)
         self.page.update()
 

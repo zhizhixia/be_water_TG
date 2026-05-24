@@ -8,9 +8,9 @@ echo.
 
 where conda >nul 2>&1
 if not errorlevel 1 (
-    call conda activate host >nul 2>&1
+    call conda activate be_water >nul 2>&1
     if not errorlevel 1 (
-        echo [OK] Conda env 'host' activated
+        echo [OK] Conda env 'be_water' activated
     ) else (
         echo [--] Using direct Python path
     )
@@ -21,7 +21,7 @@ if not errorlevel 1 (
 echo [>>] Starting GUI...
 echo.
 
-D:\anaconda\envs\host\python.exe main.py
+D:\miniconda\envs\be_water\python.exe main.py
 
 if errorlevel 1 (
     echo.

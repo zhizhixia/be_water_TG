@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 import flet as ft
 from telethon.errors import FloodWaitError, RPCError
@@ -31,6 +33,7 @@ class SendState:
     paused: bool = False
     total_count: int = 0
     per_group_counts: dict[str, int] = field(default_factory=dict)
+    on_paused_callback: Callable[..., Any] | None = field(default=None)
 
 
 async def send_loop(
@@ -66,6 +69,8 @@ async def send_loop(
 
     while not state.stopped:
         # ── 暂停检查：挂起直至恢复或停止 ──
+        if state.paused and state.on_paused_callback:
+            state.on_paused_callback()
         while state.paused and not state.stopped:
             await asyncio.sleep(1)
 
