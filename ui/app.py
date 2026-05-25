@@ -67,29 +67,36 @@ async def main(page: ft.Page):
         padding=12,
     )
 
-    # Tabs layout
+    # Tabs layout (Flet 0.85: TabBar + TabBarView inside Tabs.content)
     tabs = ft.Tabs(
+        length=2,
         selected_index=0,
         animation_duration=300,
-        tabs=[
-            ft.Tab(
-                label="⚙️ 配置",
-                icon=ft.icons.Icons.SETTINGS,
-                content=ft.Container(
-                    content=config_form.build(),
-                    padding=12,
-                ),
-            ),
-            ft.Tab(
-                label="📋 日志",
-                icon=ft.icons.Icons.TERMINAL,
-                content=ft.Container(
-                    content=status_panel.build(),
-                    padding=12,
-                ),
-            ),
-        ],
         expand=True,
+        content=ft.Column(
+            expand=True,
+            controls=[
+                ft.TabBar(
+                    tabs=[
+                        ft.Tab(label="⚙️ 配置", icon=ft.icons.Icons.SETTINGS),
+                        ft.Tab(label="📋 日志", icon=ft.icons.Icons.TERMINAL),
+                    ],
+                ),
+                ft.TabBarView(
+                    expand=True,
+                    controls=[
+                        ft.Container(
+                            content=config_form.build(),
+                            padding=12,
+                        ),
+                        ft.Container(
+                            content=status_panel.build(),
+                            padding=12,
+                        ),
+                    ],
+                ),
+            ],
+        ),
     )
 
     # Main layout
