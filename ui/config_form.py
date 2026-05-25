@@ -100,6 +100,30 @@ class ConfigForm:
             visible=False,
         )
 
+        # ── 定时运行 ──
+        self.schedule_enabled = ft.Switch(
+            label="⏰ 定时运行窗口",
+            value=False,
+            on_change=self._on_schedule_change,
+        )
+        self.schedule_morning_start = ft.TextField(
+            label="上午开始", value="08:00", hint_text="hh:mm", visible=False,
+            keyboard_type=ft.KeyboardType.TEXT,
+        )
+        self.schedule_morning_end = ft.TextField(
+            label="上午结束", value="11:00", hint_text="hh:mm", visible=False,
+        )
+        self.schedule_afternoon_start = ft.TextField(
+            label="下午开始", value="14:00", hint_text="hh:mm", visible=False,
+        )
+        self.schedule_afternoon_end = ft.TextField(
+            label="下午结束", value="18:00", hint_text="hh:mm", visible=False,
+        )
+        self.anti_detect = ft.Switch(
+            label="🛡️ 反检测增强（随机间隔+emoji）",
+            value=False,
+        )
+
         # ── 每个群组的消息文件路径 (群组 → TextField) ──
         self._message_file_fields: dict[str, ft.TextField] = {}
         self._message_file_fields_saved: dict[str, str] = {}  # 从 .env 加载的持久化值
@@ -141,6 +165,12 @@ class ConfigForm:
             self.ai_base_url,
             self.ai_model,
             self.ai_prompt,
+            ft.Divider(height=8),
+            ft.Text("⏰ 定时运行", size=16, weight=ft.FontWeight.BOLD),
+            self.schedule_enabled,
+            ft.Row([self.schedule_morning_start, self.schedule_morning_end]),
+            ft.Row([self.schedule_afternoon_start, self.schedule_afternoon_end]),
+            self.anti_detect,
             ft.Divider(height=8),
             ft.Text("📁 消息文件 (输入群组链接后出现路径输入框)", size=16, weight=ft.FontWeight.BOLD),
             self._group_file_column,
@@ -257,6 +287,15 @@ class ConfigForm:
         self.ai_prompt.visible = visible
         self.page.update()
 
+    def _on_schedule_change(self, e: ft.ControlEvent | None) -> None:
+        """定时运行开关变更时切换时间输入字段的可见性。"""
+        visible = self.schedule_enabled.value
+        self.schedule_morning_start.visible = visible
+        self.schedule_morning_end.visible = visible
+        self.schedule_afternoon_start.visible = visible
+        self.schedule_afternoon_end.visible = visible
+        self.page.update()
+
     # ── 加载 / 保存 ─────────────────────────────────────────────
 
     async def load_config(self, e: ft.ControlEvent) -> None:
@@ -286,6 +325,15 @@ class ConfigForm:
             self.ai_prompt.value = settings.ai_prompt or self.ai_prompt.value  # 保留默认值
             # 触发可见性
             self._on_ai_enabled_change(None)
+
+            # 加载定时运行配置
+            self.schedule_enabled.value = settings.schedule_enabled
+            self.schedule_morning_start.value = settings.schedule_morning_start
+            self.schedule_morning_end.value = settings.schedule_morning_end
+            self.schedule_afternoon_start.value = settings.schedule_afternoon_start
+            self.schedule_afternoon_end.value = settings.schedule_afternoon_end
+            self.anti_detect.value = settings.anti_detect
+            self._on_schedule_change(None)
 
             self.status.value = "✅ 配置已加载"
             self.status.color = ft.Colors.GREEN
@@ -358,6 +406,12 @@ class ConfigForm:
                 ai_base_url=self.ai_base_url.value.strip() or "https://api.deepseek.com/v1",
                 ai_model=self.ai_model.value.strip() or "deepseek-chat",
                 ai_prompt=self.ai_prompt.value.strip(),
+                schedule_enabled=self.schedule_enabled.value,
+                schedule_morning_start=self.schedule_morning_start.value.strip() or "08:00",
+                schedule_morning_end=self.schedule_morning_end.value.strip() or "11:00",
+                schedule_afternoon_start=self.schedule_afternoon_start.value.strip() or "14:00",
+                schedule_afternoon_end=self.schedule_afternoon_end.value.strip() or "18:00",
+                anti_detect=self.anti_detect.value,
             )
             save_settings(s)
             self.status.value = "✅ 配置已保存到 .env"

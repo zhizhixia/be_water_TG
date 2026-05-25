@@ -34,6 +34,14 @@ class Settings:
     ai_prompt: str = ""
     ai_context_count: int = 5
 
+    # 定时运行窗口
+    schedule_enabled: bool = False
+    schedule_morning_start: str = "08:00"
+    schedule_morning_end: str = "11:00"
+    schedule_afternoon_start: str = "14:00"
+    schedule_afternoon_end: str = "18:00"
+    anti_detect: bool = False
+
     def __post_init__(self) -> None:
         """同步 target_group 与 target_groups 以保持向后兼容。"""
         if self.target_groups and not self.target_group:
@@ -127,6 +135,14 @@ def load_settings() -> Settings:
     ai_prompt = os.getenv("AI_PROMPT", "")
     ai_context_count = int(os.getenv("AI_CONTEXT_COUNT", "5"))
 
+    # 定时运行窗口
+    schedule_enabled = os.getenv("SCHEDULE_ENABLED", "").lower() in ("true", "1", "yes")
+    schedule_morning_start = os.getenv("SCHEDULE_MORNING_START", "08:00")
+    schedule_morning_end = os.getenv("SCHEDULE_MORNING_END", "11:00")
+    schedule_afternoon_start = os.getenv("SCHEDULE_AFTERNOON_START", "14:00")
+    schedule_afternoon_end = os.getenv("SCHEDULE_AFTERNOON_END", "18:00")
+    anti_detect = os.getenv("ANTI_DETECT", "").lower() in ("true", "1", "yes")
+
     return Settings(
         api_id=api_id,
         api_hash=api_hash,
@@ -145,6 +161,12 @@ def load_settings() -> Settings:
         ai_model=ai_model,
         ai_prompt=ai_prompt,
         ai_context_count=ai_context_count,
+        schedule_enabled=schedule_enabled,
+        schedule_morning_start=schedule_morning_start,
+        schedule_morning_end=schedule_morning_end,
+        schedule_afternoon_start=schedule_afternoon_start,
+        schedule_afternoon_end=schedule_afternoon_end,
+        anti_detect=anti_detect,
     )
 
 
@@ -184,6 +206,15 @@ def save_settings(settings: Settings, path: str | None = None) -> None:
     if settings.ai_prompt:
         new_values["AI_PROMPT"] = settings.ai_prompt
     new_values["AI_CONTEXT_COUNT"] = str(settings.ai_context_count)
+
+    if settings.schedule_enabled:
+        new_values["SCHEDULE_ENABLED"] = "true"
+    new_values["SCHEDULE_MORNING_START"] = settings.schedule_morning_start
+    new_values["SCHEDULE_MORNING_END"] = settings.schedule_morning_end
+    new_values["SCHEDULE_AFTERNOON_START"] = settings.schedule_afternoon_start
+    new_values["SCHEDULE_AFTERNOON_END"] = settings.schedule_afternoon_end
+    if settings.anti_detect:
+        new_values["ANTI_DETECT"] = "true"
 
     env_path = Path(path)
     lines: list[str] = []

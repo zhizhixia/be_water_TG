@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, time
 from typing import TYPE_CHECKING, Any
 
 import flet as ft
@@ -76,6 +78,25 @@ async def send_loop(
 
     paused_notified = False
     while not state.stopped:
+        # ── 定时窗口检查 ──
+        if settings.schedule_enabled and not state.stopped:
+            now = datetime.now().time()
+            in_morning = (
+                time.fromisoformat(settings.schedule_morning_start)
+                <= now
+                <= time.fromisoformat(settings.schedule_morning_end)
+            )
+            in_afternoon = (
+                time.fromisoformat(settings.schedule_afternoon_start)
+                <= now
+                <= time.fromisoformat(settings.schedule_afternoon_end)
+            )
+            if not (in_morning or in_afternoon):
+                if not state.paused:
+                    logger.info("⏰ 不在允许时间段内，等待 60 秒后重检...")
+                await asyncio.sleep(60)
+                continue
+
         # ── 暂停检查：挂起直至恢复或停止 ──
         while state.paused and not state.stopped:
             if not paused_notified and state.on_paused_callback:
@@ -101,6 +122,12 @@ async def send_loop(
                     if len(message) > 4000:
                         message = message[:4000]
                         logger.warning("AI 回复超长，已截断到 4000 字符")
+                    # AI 回复 emoji 尾巴
+                    if settings.anti_detect and random.random() < 0.3:
+                        emojis = ["😄", "👍", "😊", "😂", "💪", "🔥", "🎉", "🙏"]
+                        count = random.randint(1, 2)
+                        tail = "".join(random.choice(emojis) for _ in range(count))
+                        message = message.rstrip() + tail
                 except Exception:
                     logger.exception("AI 生成失败 [%s]，回退到 TXT", group)
                     try:
@@ -172,9 +199,13 @@ async def send_loop(
                     MAX_RETRIES,
                 )
 
-            # 同轮内群组间短暂间隔
+            # 群组间随机间隔
             if not state.stopped:
-                await asyncio.sleep(1)
+                if settings.anti_detect:
+                    gap = random.randint(2, 5)
+                else:
+                    gap = 1
+                await asyncio.sleep(gap)
 
             # 刷新 UI 计数器（若 page 可用）
             if page is not None:
