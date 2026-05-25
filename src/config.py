@@ -25,6 +25,14 @@ class Settings:
     proxy_port: int | None = None
     message_files: dict[str, str] = field(default_factory=dict)
 
+    # AI 聊天模式配置
+    ai_enabled: bool = False
+    ai_api_key: str = ""
+    ai_base_url: str = "https://api.deepseek.com/v1"
+    ai_model: str = "deepseek-chat"
+    ai_prompt: str = ""
+    ai_context_count: int = 5
+
     def __post_init__(self) -> None:
         """同步 target_group 与 target_groups 以保持向后兼容。"""
         if self.target_groups and not self.target_group:
@@ -109,6 +117,14 @@ def load_settings() -> Settings:
                 group, path = part.split(":", 1)
                 message_files[group.strip()] = path.strip()
 
+    # AI 聊天模式配置
+    ai_enabled = os.getenv("AI_ENABLED", "").lower() in ("true", "1", "yes")
+    ai_api_key = os.getenv("AI_API_KEY", "")
+    ai_base_url = os.getenv("AI_BASE_URL", "https://api.deepseek.com/v1")
+    ai_model = os.getenv("AI_MODEL", "deepseek-chat")
+    ai_prompt = os.getenv("AI_PROMPT", "")
+    ai_context_count = int(os.getenv("AI_CONTEXT_COUNT", "5"))
+
     return Settings(
         api_id=api_id,
         api_hash=api_hash,
@@ -120,6 +136,12 @@ def load_settings() -> Settings:
         proxy_host=proxy_host,
         proxy_port=proxy_port,
         message_files=message_files,
+        ai_enabled=ai_enabled,
+        ai_api_key=ai_api_key,
+        ai_base_url=ai_base_url,
+        ai_model=ai_model,
+        ai_prompt=ai_prompt,
+        ai_context_count=ai_context_count,
     )
 
 
@@ -148,6 +170,15 @@ def save_settings(settings: Settings, path: str | None = None) -> None:
         new_values["MESSAGE_FILES"] = ",".join(
             f"{g}:{p}" for g, p in settings.message_files.items()
         )
+    if settings.ai_enabled:
+        new_values["AI_ENABLED"] = "true"
+    if settings.ai_api_key:
+        new_values["AI_API_KEY"] = settings.ai_api_key
+    new_values["AI_BASE_URL"] = settings.ai_base_url
+    new_values["AI_MODEL"] = settings.ai_model
+    if settings.ai_prompt:
+        new_values["AI_PROMPT"] = settings.ai_prompt
+    new_values["AI_CONTEXT_COUNT"] = str(settings.ai_context_count)
 
     env_path = Path(path)
     lines: list[str] = []
