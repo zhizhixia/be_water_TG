@@ -17,11 +17,11 @@ logger = logging.getLogger(__name__)
 async def main(page: ft.Page):
     page.title = "Telegram 灌水工具"
     page.theme_mode = ft.ThemeMode.SYSTEM
-    page.window.width = 900
-    page.window.height = 720
-    page.window.min_width = 700
-    page.window.min_height = 500
-    page.padding = 20
+    page.window.width = 750
+    page.window.height = 600
+    page.window.min_width = 550
+    page.window.min_height = 400
+    page.padding = 12
 
     # ── 共享状态 ──
     state = SendState()
@@ -55,26 +55,8 @@ async def main(page: ft.Page):
 
     # Top: Title bar
     title = ft.Container(
-        content=ft.Text("Telegram 灌水工具", size=28, weight=ft.FontWeight.BOLD),
-        padding=ft.padding.Padding.only(bottom=16),
-    )
-
-    # Left: Config form
-    left_panel = ft.Container(
-        content=config_form.build(),
-        bgcolor=ft.Colors.SURFACE_CONTAINER,
-        border_radius=8,
-        padding=16,
-        expand=2,
-    )
-
-    # Right: Status panel
-    right_panel = ft.Container(
-        content=status_panel.build(),
-        bgcolor=ft.Colors.SURFACE_CONTAINER,
-        border_radius=8,
-        padding=16,
-        expand=3,
+        content=ft.Text("Telegram 灌水工具", size=22, weight=ft.FontWeight.BOLD),
+        padding=ft.padding.Padding.only(bottom=10),
     )
 
     # Bottom: Control panel
@@ -82,17 +64,38 @@ async def main(page: ft.Page):
         content=control_panel.build(),
         bgcolor=ft.Colors.SURFACE_CONTAINER,
         border_radius=8,
-        padding=16,
+        padding=12,
+    )
+
+    # Tabs layout
+    tabs = ft.Tabs(
+        selected_index=0,
+        animation_duration=300,
+        tabs=[
+            ft.Tab(
+                text="⚙️ 配置",
+                icon=ft.icons.Icons.SETTINGS,
+                content=ft.Container(
+                    content=config_form.build(),
+                    padding=12,
+                ),
+            ),
+            ft.Tab(
+                text="📋 日志",
+                icon=ft.icons.Icons.TERMINAL,
+                content=ft.Container(
+                    content=status_panel.build(),
+                    padding=12,
+                ),
+            ),
+        ],
+        expand=True,
     )
 
     # Main layout
     page.add(
         title,
-        ft.Row(
-            [left_panel, right_panel],
-            expand=True,
-            vertical_alignment=ft.CrossAxisAlignment.START,
-        ),
+        tabs,
         bottom_bar,
     )
 
