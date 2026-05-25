@@ -165,7 +165,7 @@ Wave FINAL:
   **Agent**: `quick`
   **Wave**: 2
 
-- [ ] 6. `ui/config_form.py` — API 配置 + prompt + 模式切换
+- [x] 6. `ui/config_form.py` — API 配置 + prompt + 模式切换
 
   **What to do**:
   - 在 API ID/Hash 下方新增 AI 配置区域（可折叠或分组）

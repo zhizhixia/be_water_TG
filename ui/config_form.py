@@ -65,6 +65,41 @@ class ConfigForm:
             on_change=self._validate_proxy,
         )
 
+        # ── AI 配置 ──
+        self.ai_enabled = ft.Switch(
+            label="AI 智能聊天模式",
+            value=False,
+            on_change=self._on_ai_enabled_change,
+        )
+        self.ai_api_key = ft.TextField(
+            label="AI API Key",
+            hint_text="sk-your-deepseek-api-key",
+            password=True,
+            can_reveal_password=True,
+            visible=False,
+        )
+        self.ai_base_url = ft.TextField(
+            label="AI Base URL",
+            hint_text="https://api.deepseek.com/v1",
+            value="https://api.deepseek.com/v1",
+            visible=False,
+        )
+        self.ai_model = ft.TextField(
+            label="AI 模型",
+            hint_text="deepseek-chat",
+            value="deepseek-chat",
+            visible=False,
+        )
+        self.ai_prompt = ft.TextField(
+            label="AI 系统提示词 (System Prompt)",
+            hint_text="描述 AI 的聊天风格和人设",
+            value="你是一个普通群聊参与者，请根据对话上下文自然地回复消息。回复要简短、口语化，像真人聊天一样。不要使用 AI 语气，不要提供帮助或自我介绍。",
+            multiline=True,
+            min_lines=3,
+            max_lines=5,
+            visible=False,
+        )
+
         # ── 每个群组的消息文件路径 (群组 → TextField) ──
         self._message_file_fields: dict[str, ft.TextField] = {}
         self._message_file_fields_saved: dict[str, str] = {}  # 从 .env 加载的持久化值
@@ -99,6 +134,13 @@ class ConfigForm:
             self.target_groups,
             ft.Row([self.min_interval, self.max_interval]),
             ft.Row([self.proxy_host, self.proxy_port]),
+            ft.Divider(height=8),
+            ft.Text("🤖 AI 智能聊天", size=16, weight=ft.FontWeight.BOLD),
+            self.ai_enabled,
+            self.ai_api_key,
+            self.ai_base_url,
+            self.ai_model,
+            self.ai_prompt,
             ft.Divider(height=8),
             ft.Text("📁 消息文件 (输入群组链接后出现路径输入框)", size=16, weight=ft.FontWeight.BOLD),
             self._group_file_column,
@@ -206,6 +248,15 @@ class ConfigForm:
         self._rebuild_group_file_rows()
         self.page.update()
 
+    def _on_ai_enabled_change(self, e: ft.ControlEvent | None) -> None:
+        """AI 模式开关变更时切换 AI 配置字段的可见性。"""
+        visible = self.ai_enabled.value
+        self.ai_api_key.visible = visible
+        self.ai_base_url.visible = visible
+        self.ai_model.visible = visible
+        self.ai_prompt.visible = visible
+        self.page.update()
+
     # ── 加载 / 保存 ─────────────────────────────────────────────
 
     async def load_config(self, e: ft.ControlEvent) -> None:
@@ -226,6 +277,15 @@ class ConfigForm:
                 for group, path in settings.message_files.items():
                     self._message_file_fields_saved[group] = path
             self._rebuild_group_file_rows()
+
+            # 加载 AI 配置
+            self.ai_enabled.value = settings.ai_enabled
+            self.ai_api_key.value = settings.ai_api_key
+            self.ai_base_url.value = settings.ai_base_url
+            self.ai_model.value = settings.ai_model
+            self.ai_prompt.value = settings.ai_prompt or self.ai_prompt.value  # 保留默认值
+            # 触发可见性
+            self._on_ai_enabled_change(None)
 
             self.status.value = "✅ 配置已加载"
             self.status.color = ft.Colors.GREEN
@@ -293,6 +353,11 @@ class ConfigForm:
                 proxy_host=host,
                 proxy_port=port,
                 message_files=self.get_group_file_map(),
+                ai_enabled=self.ai_enabled.value,
+                ai_api_key=self.ai_api_key.value.strip(),
+                ai_base_url=self.ai_base_url.value.strip() or "https://api.deepseek.com/v1",
+                ai_model=self.ai_model.value.strip() or "deepseek-chat",
+                ai_prompt=self.ai_prompt.value.strip(),
             )
             save_settings(s)
             self.status.value = "✅ 配置已保存到 .env"
