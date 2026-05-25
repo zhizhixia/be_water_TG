@@ -73,7 +73,7 @@ async def main(page: ft.Page):
         animation_duration=300,
         tabs=[
             ft.Tab(
-                text="⚙️ 配置",
+                label="⚙️ 配置",
                 icon=ft.icons.Icons.SETTINGS,
                 content=ft.Container(
                     content=config_form.build(),
@@ -81,7 +81,7 @@ async def main(page: ft.Page):
                 ),
             ),
             ft.Tab(
-                text="📋 日志",
+                label="📋 日志",
                 icon=ft.icons.Icons.TERMINAL,
                 content=ft.Container(
                     content=status_panel.build(),
