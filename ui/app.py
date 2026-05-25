@@ -88,10 +88,12 @@ async def main(page: ft.Page):
                         ft.Container(
                             content=config_form.build(),
                             padding=12,
+                            expand=True,
                         ),
                         ft.Container(
                             content=status_panel.build(),
                             padding=12,
+                            expand=True,
                         ),
                     ],
                 ),
