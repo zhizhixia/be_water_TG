@@ -40,9 +40,11 @@ class TelegramSender:
         # 配置代理（如果设置）
         proxy = None
         if self._settings.proxy_host and self._settings.proxy_port:
-            proxy = ("http", self._settings.proxy_host, self._settings.proxy_port)
+            proxy_type = self._settings.proxy_type or "http"
+            proxy = (proxy_type, self._settings.proxy_host, self._settings.proxy_port)
             logger.info(
-                "使用 HTTP 代理: %s:%d",
+                "使用 %s 代理: %s:%d",
+                proxy_type,
                 self._settings.proxy_host,
                 self._settings.proxy_port,
             )
@@ -109,6 +111,21 @@ class TelegramSender:
         except Exception as e:
             logger.exception("❌ 发送消息时发生未知异常")
             raise
+
+    async def get_recent_messages(self, entity: str, limit: int = 5) -> list:
+        """获取指定实体的最近消息。
+
+        Args:
+            entity: 目标实体（群组 username 或 ID）。
+            limit: 获取的消息数量。
+
+        Returns:
+            消息列表，客户端未连接时返回空列表。
+        """
+        if self._client is None or not self._client.is_connected():
+            logger.warning("客户端未连接，无法获取消息")
+            return []
+        return await self._client.get_messages(entity, limit=limit)
 
     async def disconnect(self) -> None:
         """断开 Telegram 客户端连接。"""

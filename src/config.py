@@ -23,6 +23,7 @@ class Settings:
     max_interval: int = 180
     proxy_host: str | None = None
     proxy_port: int | None = None
+    proxy_type: str = "http"
     message_files: dict[str, str] = field(default_factory=dict)
 
     # AI 聊天模式配置
@@ -97,6 +98,7 @@ def load_settings() -> Settings:
     # 代理配置（可选）
     proxy_host = os.getenv("PROXY_HOST")  # 例如 127.0.0.1
     proxy_port_str = os.getenv("PROXY_PORT")  # 例如 7890
+    proxy_type = os.getenv("PROXY_TYPE", "http")
 
     proxy_port = int(proxy_port_str) if proxy_port_str else None
 
@@ -135,6 +137,7 @@ def load_settings() -> Settings:
         max_interval=max_interval,
         proxy_host=proxy_host,
         proxy_port=proxy_port,
+        proxy_type=proxy_type,
         message_files=message_files,
         ai_enabled=ai_enabled,
         ai_api_key=ai_api_key,
@@ -166,6 +169,8 @@ def save_settings(settings: Settings, path: str | None = None) -> None:
         new_values["PROXY_HOST"] = settings.proxy_host
     if settings.proxy_port is not None:
         new_values["PROXY_PORT"] = str(settings.proxy_port)
+    if settings.proxy_type != "http":
+        new_values["PROXY_TYPE"] = settings.proxy_type
     if settings.message_files:
         new_values["MESSAGE_FILES"] = ",".join(
             f"{g}:{p}" for g, p in settings.message_files.items()

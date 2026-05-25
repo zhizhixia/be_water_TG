@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from enum import Enum, auto
 
 import flet as ft
@@ -133,14 +132,6 @@ class ControlPanel:
         send_loop 完成当前轮次后，外部代码调用 set_state(PAUSED)。
         """
         self.set_state(AppState.PAUSING)
-
-        async def _noop() -> None:
-            await asyncio.sleep(0.5)
-
-        try:
-            asyncio.create_task(_noop())
-        except RuntimeError:
-            pass  # 事件循环尚未就绪
 
     def _on_resume(self, e: ft.ControlEvent) -> None:
         """点击"继续"：PAUSED → RUNNING。"""

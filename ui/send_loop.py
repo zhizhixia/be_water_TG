@@ -74,12 +74,15 @@ async def send_loop(
         if group not in state.per_group_counts:
             state.per_group_counts[group] = 0
 
+    paused_notified = False
     while not state.stopped:
         # ── 暂停检查：挂起直至恢复或停止 ──
-        if state.paused and state.on_paused_callback:
-            state.on_paused_callback()
         while state.paused and not state.stopped:
+            if not paused_notified and state.on_paused_callback:
+                state.on_paused_callback()
+                paused_notified = True
             await asyncio.sleep(1)
+        paused_notified = False
 
         if state.stopped:
             break
@@ -95,6 +98,9 @@ async def send_loop(
                     message = await ai_sender.generate_message(
                         group, settings.ai_prompt, settings.ai_context_count
                     )
+                    if len(message) > 4000:
+                        message = message[:4000]
+                        logger.warning("AI 回复超长，已截断到 4000 字符")
                 except Exception:
                     logger.exception("AI 生成失败 [%s]，回退到 TXT", group)
                     try:

@@ -128,7 +128,7 @@ async def main(page: ft.Page):
         # 2. 获取消息文件映射
         group_file_map = config_form.get_group_file_map()
         if not group_file_map:
-            status_panel.add_log("warning", "请先在左侧输入群组链接和消息文件路径")
+            status_panel.add_log("warning", "请在配置页面输入群组链接和消息文件路径")
             control_panel.set_state(AppState.IDLE)
             send_task_active = False
             return
