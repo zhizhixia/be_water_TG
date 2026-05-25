@@ -5,6 +5,8 @@ import flet as ft
 
 from src.config import load_settings
 from src.sender import TelegramSender
+from src.ai_client import AIClient
+from src.ai_sender import AISender
 from ui.config_form import ConfigForm
 from ui.control_panel import ControlPanel, AppState
 from ui.send_loop import SendState, send_loop
@@ -152,6 +154,17 @@ async def main(page: ft.Page):
 
         status_panel.add_log("success", f"已连接 Telegram，开始向 {len(settings.target_groups)} 个群组发送")
 
+        # 4.5 创建 AI 发送器（如果启用）
+        ai_sender = None
+        if settings.ai_enabled and settings.ai_api_key:
+            ai_client = AIClient(
+                api_key=settings.ai_api_key,
+                base_url=settings.ai_base_url,
+                model=settings.ai_model,
+            )
+            ai_sender = AISender(sender, ai_client)
+            status_panel.add_log("info", "🤖 AI 聊天模式已启用")
+
         # 5. 重置发送状态
         state.stopped = False
         state.paused = False
@@ -164,7 +177,7 @@ async def main(page: ft.Page):
 
         # 6. 运行发送循环 (阻塞直到停止)
         try:
-            await send_loop(page, sender, settings, state, message_manager, status_panel=status_panel)
+            await send_loop(page, sender, settings, state, message_manager, status_panel=status_panel, ai_sender=ai_sender)
         except Exception as ex:
             status_panel.add_log("error", f"发送循环异常: {ex}")
         finally:

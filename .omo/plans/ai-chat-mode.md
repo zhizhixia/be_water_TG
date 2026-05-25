@@ -154,7 +154,7 @@ Wave FINAL:
   **Agent**: `deep`
   **Wave**: 2
 
-- [ ] 5. `ui/send_loop.py` — AI 模式分支
+- [x] 5. `ui/send_loop.py` — AI 模式分支
 
   **What to do**:
   - send_loop 收到 `settings.ai_enabled` 时走 AI 分支
@@ -177,7 +177,7 @@ Wave FINAL:
   **Agent**: `visual-engineering`
   **Wave**: 2
 
-- [ ] 7. `ui/app.py` — 创建 AISender + 传递新参数
+- [x] 7. `ui/app.py` — 创建 AISender + 传递新参数
 
   **What to do**:
   - start_sending() 中：如果 ai_enabled，创建 AIClient → AISender
@@ -191,9 +191,9 @@ Wave FINAL:
 
 ## Final Verification Wave
 
-- [ ] F1. pytest 全部测试 + 导入验证
-- [ ] F2. 代码审查
-- [ ] F3. 范围完整性检查（Must Have 5 条）
+- [x] F1. pytest 全部测试 + 导入验证 — 66/66 PASS ✅
+- [x] F2. 代码审查 — APPROVE ✅
+- [x] F3. 范围完整性检查（Must Have 7 条） — APPROVE ✅
 
 ---
 

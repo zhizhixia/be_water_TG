@@ -16,6 +16,7 @@ from ui.message_manager import MessageManager
 
 if TYPE_CHECKING:
     from ui.status_panel import StatusPanel
+    from src.ai_sender import AISender
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,7 @@ async def send_loop(
     state: SendState,
     message_manager: MessageManager,
     status_panel: "StatusPanel | None" = None,
+    ai_sender: "AISender | None" = None,
 ) -> None:
     """多群组异步发送主循环。
 
@@ -88,11 +90,24 @@ async def send_loop(
                 break
 
             # 获取该群组的消息
-            try:
-                message = message_manager.get_message(group)
-            except Exception:
-                logger.exception("获取消息失败 [%s]", group)
-                continue
+            if settings.ai_enabled and ai_sender is not None:
+                try:
+                    message = await ai_sender.generate_message(
+                        group, settings.ai_prompt, settings.ai_context_count
+                    )
+                except Exception:
+                    logger.exception("AI 生成失败 [%s]，回退到 TXT", group)
+                    try:
+                        message = message_manager.get_message(group)
+                    except Exception:
+                        logger.exception("获取消息失败 [%s]", group)
+                        continue
+            else:
+                try:
+                    message = message_manager.get_message(group)
+                except Exception:
+                    logger.exception("获取消息失败 [%s]", group)
+                    continue
 
             # ── 带重试的发送 ──
             sent = False
