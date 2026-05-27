@@ -142,11 +142,13 @@ class ControlPanel:
 
         def confirm_stop(e: ft.ControlEvent):
             alert.open = False
+            self.page.overlay.remove(alert)
             self.page.update()
             self.set_state(AppState.IDLE)
 
         def cancel_stop(e: ft.ControlEvent):
             alert.open = False
+            self.page.overlay.remove(alert)
             self.page.update()
 
         alert = ft.AlertDialog(
@@ -161,7 +163,7 @@ class ControlPanel:
                 ),
             ],
         )
-        self.page.dialog = alert
+        self.page.overlay.append(alert)
         alert.open = True
         self.page.update()
 
