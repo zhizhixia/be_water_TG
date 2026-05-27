@@ -43,6 +43,13 @@ class Settings:
     schedule_afternoon_end: str = "18:00"
     anti_detect: bool = False
 
+    # 反检测增强参数（真人模拟：打字延迟、思考延迟、跳过轮次）
+    typing_delay_min: int = 3
+    typing_delay_max: int = 8
+    thinking_delay_min: int = 5
+    thinking_delay_max: int = 25
+    skip_round_pct: int = 10
+
     def __post_init__(self) -> None:
         """同步 target_group 与 target_groups 以保持向后兼容。"""
         if self.target_groups and not self.target_group:
@@ -181,6 +188,11 @@ def load_settings() -> Settings:
     schedule_afternoon_start = os.getenv("SCHEDULE_AFTERNOON_START", "14:00")
     schedule_afternoon_end = os.getenv("SCHEDULE_AFTERNOON_END", "18:00")
     anti_detect = os.getenv("ANTI_DETECT", "").lower() in ("true", "1", "yes")
+    typing_delay_min = int(os.getenv("TYPING_DELAY_MIN", "3"))
+    typing_delay_max = int(os.getenv("TYPING_DELAY_MAX", "8"))
+    thinking_delay_min = int(os.getenv("THINKING_DELAY_MIN", "5"))
+    thinking_delay_max = int(os.getenv("THINKING_DELAY_MAX", "25"))
+    skip_round_pct = int(os.getenv("SKIP_ROUND_PCT", "10"))
 
     return Settings(
         api_id=api_id,
@@ -206,6 +218,11 @@ def load_settings() -> Settings:
         schedule_afternoon_start=schedule_afternoon_start,
         schedule_afternoon_end=schedule_afternoon_end,
         anti_detect=anti_detect,
+        typing_delay_min=typing_delay_min,
+        typing_delay_max=typing_delay_max,
+        thinking_delay_min=thinking_delay_min,
+        thinking_delay_max=thinking_delay_max,
+        skip_round_pct=skip_round_pct,
     )
 
 
@@ -254,6 +271,16 @@ def save_settings(settings: Settings, path: str | None = None) -> None:
     new_values["SCHEDULE_AFTERNOON_END"] = settings.schedule_afternoon_end
     if settings.anti_detect:
         new_values["ANTI_DETECT"] = "true"
+    if settings.typing_delay_min != 3:
+        new_values["TYPING_DELAY_MIN"] = str(settings.typing_delay_min)
+    if settings.typing_delay_max != 8:
+        new_values["TYPING_DELAY_MAX"] = str(settings.typing_delay_max)
+    if settings.thinking_delay_min != 5:
+        new_values["THINKING_DELAY_MIN"] = str(settings.thinking_delay_min)
+    if settings.thinking_delay_max != 25:
+        new_values["THINKING_DELAY_MAX"] = str(settings.thinking_delay_max)
+    if settings.skip_round_pct != 10:
+        new_values["SKIP_ROUND_PCT"] = str(settings.skip_round_pct)
 
     env_path = Path(path)
     lines: list[str] = []

@@ -119,111 +119,146 @@ async def send_loop(
         if state.stopped:
             break
 
-        # ── 一轮：向每个群组发送一条消息 ──
-        for group in settings.target_groups:
-            if state.stopped:
-                break
+        # ── 反检测：思考延迟 ──
+        if not state.stopped and settings.anti_detect:
+            think = random.randint(
+                settings.thinking_delay_min, settings.thinking_delay_max
+            )
+            logger.info("🤔 思考中 %d 秒...", think)
+            await asyncio.sleep(think)
 
-            # 获取该群组的消息
-            if settings.ai_enabled and ai_sender is not None:
+        # ── 反检测：潜水回合 ──
+        skip_round = (
+            settings.anti_detect
+            and random.randint(1, 100) <= settings.skip_round_pct
+        )
+        if skip_round:
+            logger.info("🙈 本轮潜水，跳过")
+            if status_panel:
                 try:
-                    message = await ai_sender.generate_message(
-                        group, settings.ai_prompt, settings.ai_context_count
-                    )
-                    if len(message) > 4000:
-                        message = message[:4000]
-                        logger.warning("AI 回复超长，已截断到 4000 字符")
-                    # AI 回复 emoji 尾巴
-                    if settings.anti_detect and random.random() < 0.3:
-                        emojis = ["😄", "👍", "😊", "😂", "💪", "🔥", "🎉", "🙏"]
-                        count = random.randint(1, 2)
-                        tail = "".join(random.choice(emojis) for _ in range(count))
-                        message = message.rstrip() + tail
+                    status_panel.update_countdown(0)
                 except Exception:
-                    logger.exception("AI 生成失败 [%s]，回退到 TXT", group)
+                    pass
+        else:
+            # ── 一轮：向每个群组发送一条消息 ──
+            for group in settings.target_groups:
+                if state.stopped:
+                    break
+
+                # 获取该群组的消息
+                if settings.ai_enabled and ai_sender is not None:
+                    try:
+                        message = await ai_sender.generate_message(
+                            group, settings.ai_prompt, settings.ai_context_count
+                        )
+                        if len(message) > 4000:
+                            message = message[:4000]
+                            logger.warning("AI 回复超长，已截断到 4000 字符")
+                        # 反检测：AI 消息长度波动
+                        if settings.anti_detect and random.random() < 0.3:
+                            short_len = random.randint(5, 15)
+                            message = message[:short_len]
+                        # AI 回复 emoji 尾巴
+                        if settings.anti_detect and random.random() < 0.3:
+                            emojis = ["😄", "👍", "😊", "😂", "💪", "🔥", "🎉", "🙏"]
+                            count = random.randint(1, 2)
+                            tail = "".join(random.choice(emojis) for _ in range(count))
+                            message = message.rstrip() + tail
+                    except Exception:
+                        logger.exception("AI 生成失败 [%s]，回退到 TXT", group)
+                        try:
+                            message = message_manager.get_message(group)
+                        except Exception:
+                            logger.exception("获取消息失败 [%s]", group)
+                            continue
+                else:
                     try:
                         message = message_manager.get_message(group)
                     except Exception:
                         logger.exception("获取消息失败 [%s]", group)
                         continue
-            else:
-                try:
-                    message = message_manager.get_message(group)
-                except Exception:
-                    logger.exception("获取消息失败 [%s]", group)
-                    continue
 
-            # ── 带重试的发送 ──
-            sent = False
-            for attempt in range(MAX_RETRIES):
-                try:
-                    await sender.send_message(message, target_group=group)
-                    state.per_group_counts[group] += 1
-                    state.total_count += 1
-                    logger.info(
-                        "✅ [%s] 已发送 (本组: %d, 总计: %d)",
-                        group,
-                        state.per_group_counts[group],
-                        state.total_count,
-                    )
-                    sent = True
-                    if status_panel:
-                        try:
-                            status_panel.update_counter(state.total_count, state.per_group_counts)
-                        except Exception:
-                            pass
-                    break
-                except FloodWaitError as e:
-                    logger.warning("⚠️ FloodWait %ds，等待中...", e.seconds)
-                    await asyncio.sleep(e.seconds)
-                    # 继续重试循环
-                except (ConnectionError, OSError) as e:
-                    if attempt < MAX_RETRIES - 1:
-                        delay = RETRY_DELAYS[attempt]
-                        logger.error(
-                            "❌ 网络错误 [%s] (第 %d/%d 次): %s，%d 秒后重试",
-                            group,
-                            attempt + 1,
-                            MAX_RETRIES,
-                            e,
-                            delay,
-                        )
-                        await asyncio.sleep(delay)
-                    else:
-                        logger.error(
-                            "❌ 网络错误 [%s] 重试 %d 次均失败: %s",
-                            group,
-                            MAX_RETRIES,
-                            e,
-                        )
-                except RPCError as e:
-                    logger.error("❌ Telegram RPC 错误 [%s]: %s", group, e)
-                    break  # RPC 错误不重试
-                except Exception:
-                    logger.exception("❌ 未知错误 [%s]", group)
-                    break  # 未知错误不重试
-
-            if not sent and not state.stopped:
-                logger.error(
-                    "❌ [%s] 发送失败 (已达最大重试次数 %d)",
-                    group,
-                    MAX_RETRIES,
-                )
-
-            # 群组间随机间隔
-            if not state.stopped:
+                # ── 反检测：打字模拟 ──
                 if settings.anti_detect:
-                    gap = random.randint(2, 5)
-                else:
-                    gap = 1
-                await asyncio.sleep(gap)
+                    typing_delay = random.randint(
+                        settings.typing_delay_min, settings.typing_delay_max
+                    )
+                    await sender._client.send_chat_action(
+                        entity=group, action="typing"
+                    )
+                    await asyncio.sleep(typing_delay)
 
-            # 刷新 UI 计数器（若 page 可用）
-            if page is not None:
-                try:
-                    page.update()
-                except Exception:
-                    pass  # page 可能已销毁，忽略刷新失败
+                # ── 带重试的发送 ──
+                sent = False
+                for attempt in range(MAX_RETRIES):
+                    try:
+                        await sender.send_message(message, target_group=group)
+                        state.per_group_counts[group] += 1
+                        state.total_count += 1
+                        logger.info(
+                            "✅ [%s] 已发送 (本组: %d, 总计: %d)",
+                            group,
+                            state.per_group_counts[group],
+                            state.total_count,
+                        )
+                        sent = True
+                        if status_panel:
+                            try:
+                                status_panel.update_counter(state.total_count, state.per_group_counts)
+                            except Exception:
+                                pass
+                        break
+                    except FloodWaitError as e:
+                        logger.warning("⚠️ FloodWait %ds，等待中...", e.seconds)
+                        await asyncio.sleep(e.seconds)
+                        # 继续重试循环
+                    except (ConnectionError, OSError) as e:
+                        if attempt < MAX_RETRIES - 1:
+                            delay = RETRY_DELAYS[attempt]
+                            logger.error(
+                                "❌ 网络错误 [%s] (第 %d/%d 次): %s，%d 秒后重试",
+                                group,
+                                attempt + 1,
+                                MAX_RETRIES,
+                                e,
+                                delay,
+                            )
+                            await asyncio.sleep(delay)
+                        else:
+                            logger.error(
+                                "❌ 网络错误 [%s] 重试 %d 次均失败: %s",
+                                group,
+                                MAX_RETRIES,
+                                e,
+                            )
+                    except RPCError as e:
+                        logger.error("❌ Telegram RPC 错误 [%s]: %s", group, e)
+                        break  # RPC 错误不重试
+                    except Exception:
+                        logger.exception("❌ 未知错误 [%s]", group)
+                        break  # 未知错误不重试
+
+                if not sent and not state.stopped:
+                    logger.error(
+                        "❌ [%s] 发送失败 (已达最大重试次数 %d)",
+                        group,
+                        MAX_RETRIES,
+                    )
+
+                # 群组间随机间隔
+                if not state.stopped:
+                    if settings.anti_detect:
+                        gap = random.randint(2, 5)
+                    else:
+                        gap = 1
+                    await asyncio.sleep(gap)
+
+                # 刷新 UI 计数器（若 page 可用）
+                if page is not None:
+                    try:
+                        page.update()
+                    except Exception:
+                        pass  # page 可能已销毁，忽略刷新失败
 
         # ── 等待下一轮 ──
         if not state.stopped:

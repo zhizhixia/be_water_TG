@@ -122,6 +122,22 @@ class ConfigForm:
         self.anti_detect = ft.Switch(
             label="🛡️ 反检测增强（随机间隔+emoji）",
             value=False,
+            on_change=self._on_anti_detect_change,
+        )
+        self.typing_delay_min = ft.TextField(
+            label="打字最短 (秒)", value="3", keyboard_type=ft.KeyboardType.NUMBER, visible=False,
+        )
+        self.typing_delay_max = ft.TextField(
+            label="打字最长 (秒)", value="8", keyboard_type=ft.KeyboardType.NUMBER, visible=False,
+        )
+        self.thinking_delay_min = ft.TextField(
+            label="思考最短 (秒)", value="5", keyboard_type=ft.KeyboardType.NUMBER, visible=False,
+        )
+        self.thinking_delay_max = ft.TextField(
+            label="思考最长 (秒)", value="25", keyboard_type=ft.KeyboardType.NUMBER, visible=False,
+        )
+        self.skip_round_pct = ft.TextField(
+            label="潜水概率 (%)", value="10", keyboard_type=ft.KeyboardType.NUMBER, visible=False,
         )
 
         # ── 每个群组的消息文件路径 (群组 → TextField) ──
@@ -171,6 +187,9 @@ class ConfigForm:
             ft.Row([self.schedule_morning_start, self.schedule_morning_end]),
             ft.Row([self.schedule_afternoon_start, self.schedule_afternoon_end]),
             self.anti_detect,
+            ft.Row([self.typing_delay_min, self.typing_delay_max]),
+            ft.Row([self.thinking_delay_min, self.thinking_delay_max]),
+            self.skip_round_pct,
             ft.Divider(height=8),
             ft.Text("📁 消息文件 (输入群组链接后出现路径输入框)", size=16, weight=ft.FontWeight.BOLD),
             self._group_file_column,
@@ -299,6 +318,14 @@ class ConfigForm:
         self.schedule_afternoon_end.visible = visible
         self.page.update()
 
+    def _on_anti_detect_change(self, e: ft.ControlEvent | None) -> None:
+        """反检测增强开关变更时切换参数输入字段的可见性。"""
+        v = self.anti_detect.value
+        for f in [self.typing_delay_min, self.typing_delay_max, self.thinking_delay_min,
+                  self.thinking_delay_max, self.skip_round_pct]:
+            f.visible = v
+        self.page.update()
+
     # ── 加载 / 保存 ─────────────────────────────────────────────
 
     async def load_config(self, e: ft.ControlEvent) -> None:
@@ -337,6 +364,14 @@ class ConfigForm:
             self.schedule_afternoon_end.value = settings.schedule_afternoon_end
             self.anti_detect.value = settings.anti_detect
             self._on_schedule_change(None)
+
+            # 加载反检测参数
+            self.typing_delay_min.value = str(settings.typing_delay_min)
+            self.typing_delay_max.value = str(settings.typing_delay_max)
+            self.thinking_delay_min.value = str(settings.thinking_delay_min)
+            self.thinking_delay_max.value = str(settings.thinking_delay_max)
+            self.skip_round_pct.value = str(settings.skip_round_pct)
+            self._on_anti_detect_change(None)
 
             self.status.value = "✅ 配置已加载"
             self.status.color = ft.Colors.GREEN
@@ -415,6 +450,11 @@ class ConfigForm:
                 schedule_afternoon_start=self.schedule_afternoon_start.value.strip() or "14:00",
                 schedule_afternoon_end=self.schedule_afternoon_end.value.strip() or "18:00",
                 anti_detect=self.anti_detect.value,
+                typing_delay_min=int(self.typing_delay_min.value or "3"),
+                typing_delay_max=int(self.typing_delay_max.value or "8"),
+                thinking_delay_min=int(self.thinking_delay_min.value or "5"),
+                thinking_delay_max=int(self.thinking_delay_max.value or "25"),
+                skip_round_pct=int(self.skip_round_pct.value or "10"),
             )
             save_settings(s)
             self.status.value = "✅ 配置已保存到 .env"
