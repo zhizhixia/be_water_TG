@@ -77,6 +77,7 @@ async def send_loop(
             state.per_group_counts[group] = 0
 
     paused_notified = False
+    schedule_wait_count = 0
     while not state.stopped:
         # ── 定时窗口检查 ──
         if settings.schedule_enabled and not state.stopped:
@@ -92,10 +93,20 @@ async def send_loop(
                 <= time.fromisoformat(settings.schedule_afternoon_end)
             )
             if not (in_morning or in_afternoon):
+                schedule_wait_count += 1
+                if schedule_wait_count > 120:
+                    logger.warning("⏰ 已等待超 2 小时，自动暂停，请手动恢复")
+                    if not state.paused:
+                        state.paused = True
+                    if state.on_paused_callback:
+                        state.on_paused_callback()
+                    schedule_wait_count = 0
                 if not state.paused:
                     logger.info("⏰ 不在允许时间段内，等待 60 秒后重检...")
                 await asyncio.sleep(60)
                 continue
+            else:
+                schedule_wait_count = 0  # 进入窗口时重置
 
         # ── 暂停检查：挂起直至恢复或停止 ──
         while state.paused and not state.stopped:

@@ -19,8 +19,12 @@ class GUIHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
         try:
             msg = self.format(record)
-            level = "error" if record.levelno >= logging.ERROR else \
-                    "warning" if record.levelno >= logging.WARNING else "info"
+            if record.levelno >= logging.ERROR:
+                level = "error"
+            elif record.levelno >= logging.WARNING:
+                level = "warning"
+            else:
+                level = "info"
             self._panel.add_log(level, msg)
         except Exception:
             pass

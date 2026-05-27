@@ -8,9 +8,8 @@ from telethon import TelegramClient
 from telethon.errors import FloodWaitError
 
 from src.config import Settings
-from src.logger import setup_logger
 
-logger = setup_logger("sender")
+logger = logging.getLogger(__name__)
 
 
 class TelegramSender:
@@ -95,7 +94,7 @@ class TelegramSender:
             ConnectionError: 网络连接异常时抛出。
             Exception: 其他异常时抛出。
         """
-        target = target_group if target_group else self._settings.target_group
+        target = target_group if target_group else self._settings.target_groups[0]
         try:
             await self._client.send_message(target, text)
             logger.info("✅ 已发送: %r → %s", text[:30], target)

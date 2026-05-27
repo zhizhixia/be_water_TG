@@ -19,6 +19,7 @@ class AISender:
         self._sender = telegram_sender
         self._client = ai_client
         self._memory: dict[str, deque[str]] = {}  # group -> deque of own messages
+        self._sent_texts: set[str] = set()  # 精确追踪 AI 自己发过的文本
 
     async def generate_message(
         self, group: str, prompt: str, context_count: int
@@ -53,8 +54,7 @@ class AISender:
                 else:
                     name = "群友"
                 # 标注是否为 AI 之前的发言
-                own_history = self._memory.get(group)
-                if own_history and text in own_history:
+                if text in self._sent_texts:
                     name += " (AI自己)"
                 context_lines.append(f"[{name}]: {text}")
 
@@ -87,6 +87,7 @@ class AISender:
         if group not in self._memory:
             self._memory[group] = deque(maxlen=DEFAULT_MEMORY_SIZE)
         self._memory[group].append(reply)
+        self._sent_texts.add(reply)
 
         logger.info("🤖 AI 生成回复 [%s]: %s", group, reply[:30])
         return reply

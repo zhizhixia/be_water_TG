@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def load_messages(file_path: str) -> list[str]:
@@ -27,6 +30,7 @@ def load_messages(file_path: str) -> list[str]:
     messages = [msg.strip() for msg in content.split(",")]
     messages = [msg for msg in messages if msg]
 
+    logger.info("已加载 %d 条消息从: %s", len(messages), file_path)
     return messages
 
 
