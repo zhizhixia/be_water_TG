@@ -199,6 +199,9 @@ class ConfigForm:
             display_name = group.split("/")[-1][:20]
             # 优先用已保存的值，其次用当前输入框的值
             saved = self._message_file_fields_saved.get(group, "")
+            if not saved:
+                username = group.rstrip("/").split("/")[-1]
+                saved = self._message_file_fields_saved.get(username, "")
             existing = self._message_file_fields.get(group, None)
             cur_value = existing.value if existing else ""
             default_value = saved or cur_value

@@ -141,11 +141,13 @@ class ControlPanel:
         """点击"停止"：弹出确认对话框，确认后任意运行态 → IDLE。"""
 
         def confirm_stop(e: ft.ControlEvent):
-            self.page.close(alert)
+            alert.open = False
+            self.page.update()
             self.set_state(AppState.IDLE)
 
         def cancel_stop(e: ft.ControlEvent):
-            self.page.close(alert)
+            alert.open = False
+            self.page.update()
 
         alert = ft.AlertDialog(
             title=ft.Text("确认停止"),
@@ -159,7 +161,9 @@ class ControlPanel:
                 ),
             ],
         )
-        self.page.open(alert)
+        self.page.dialog = alert
+        alert.open = True
+        self.page.update()
 
     def set_retry_status(self, text: str) -> None:
         """设置重试状态提示文本，空字符串则隐藏。"""
