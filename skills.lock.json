@@ -1,0 +1,31 @@
+{
+  "schema": "@moyaspace/openspec-superpowers-opencode/skills-lock",
+  "version": 1,
+  "upstream": {
+    "repo": "github.com/obra/superpowers",
+    "commit": "612fbcdd01be93b7e3432f04fc8a864e2c3b8a88"
+  },
+  "skills": {
+    "brainstorming/SKILL.md": {
+      "sha256": "BBA47904A7F6BBEE3BF8A107EBBE84E65D392BE683BBB898DED736B29E415F90"
+    },
+    "writing-plans/SKILL.md": {
+      "sha256": "90056BAD3D5F196FA7C9FEC0FFE592E6D9C86BC983E406642A51D1A4198B7024"
+    },
+    "subagent-driven-development/SKILL.md": {
+      "sha256": "081AD3869E55C80BF8F890B4768A90C0E8057DAF94B1B6FADEBFC85EA5B8304A"
+    },
+    "subagent-driven-development/implementer-prompt.md": {
+      "sha256": "A416193F881E5A712C988FFFABFE1D5A97BFFCD091EB95577C84FE2136588617"
+    },
+    "subagent-driven-development/spec-reviewer-prompt.md": {
+      "sha256": "631980E472EEC5394DE8B89B69D432E54FD3F7F523ECF9AFA7EB4CDA0C9B2BAF"
+    },
+    "subagent-driven-development/code-quality-reviewer-prompt.md": {
+      "sha256": "06D1E7C2287E5A00BD1809BF39038ABD5F413B4CF917C37D30F00C48F6293421"
+    },
+    "test-driven-development/SKILL.md": {
+      "sha256": "7DEE67B4AF6BDCCC7A914CA34533184D64592D0F5B23AEAE631538168DB14994"
+    }
+  }
+}
