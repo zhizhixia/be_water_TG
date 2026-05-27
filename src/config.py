@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -48,6 +49,36 @@ class Settings:
             self.target_group = self.target_groups[0]
         elif self.target_group and not self.target_groups:
             self.target_groups = [self.target_group]
+
+
+def _parse_legacy_message_file(part: str) -> tuple[str, str]:
+    """解析旧格式 MESSAGE_FILES 中的一个条目（: 分隔）。
+
+    兼容以下场景：
+    - group:path（简单格式）
+    - https://t.me/group:path（含 URL，: 在 URL 中）
+    - https://t.me/group:C:\\path（含 Windows 绝对路径）
+    """
+    # 无 URL：简单分割
+    if "://" not in part:
+        group, path = part.split(":", 1)
+        return group, path
+
+    # 含 URL + Windows 绝对路径 (如 C:\...) — 排除 :// URL 冒号
+    drive_match = re.search(r"[a-zA-Z]:[\\/](?!/)", part)
+    if drive_match:
+        # 分隔符是驱动器字母前的最后一个 :
+        prefix = part[: drive_match.start()]
+        idx = prefix.rfind(":")
+        if idx > 0:
+            return part[:idx].strip(), part[idx + 1 :].strip()
+
+    # 含 URL + 相对路径：最后一个 : 是分隔符
+    idx = part.rfind(":")
+    if idx > 0:
+        return part[:idx].strip(), part[idx + 1 :].strip()
+
+    return "", ""
 
 
 def load_settings() -> Settings:
@@ -115,7 +146,8 @@ def load_settings() -> Settings:
     if proxy_port and not proxy_host:
         raise ValueError("PROXY_PORT is set but PROXY_HOST is missing")
 
-    # 消息文件映射 (可选): MESSAGE_FILES=hzbjhspa:messages.txt,group2:file2.txt
+    # 消息文件映射 (可选): MESSAGE_FILES=群组链接|文件路径,群组2|文件2
+    # 注意: 群组链接含完整 URL (https://t.me/xxx)，分隔符用 | 避免与 URL 的 : 冲突
     message_files: dict[str, str] = {}
     mf_raw = os.getenv("MESSAGE_FILES", "")
     if mf_raw.strip():
@@ -123,9 +155,16 @@ def load_settings() -> Settings:
             part = part.strip()
             if not part:
                 continue
-            if ":" in part:
-                group, path = part.split(":", 1)
-                message_files[group.strip()] = path.strip()
+            # 优先用 | 分隔（新格式），兼容 : 分隔（旧格式）
+            if "|" in part:
+                group, path = part.split("|", 1)
+            elif ":" in part:
+                group, path = _parse_legacy_message_file(part)
+                if not group or not path:
+                    continue
+            else:
+                continue
+            message_files[group.strip()] = path.strip()
 
     # AI 聊天模式配置
     ai_enabled = os.getenv("AI_ENABLED", "").lower() in ("true", "1", "yes")
@@ -195,7 +234,7 @@ def save_settings(settings: Settings, path: str | None = None) -> None:
         new_values["PROXY_TYPE"] = settings.proxy_type
     if settings.message_files:
         new_values["MESSAGE_FILES"] = ",".join(
-            f"{g}:{p}" for g, p in settings.message_files.items()
+            f"{g}|{p}" for g, p in settings.message_files.items()
         )
     if settings.ai_enabled:
         new_values["AI_ENABLED"] = "true"
