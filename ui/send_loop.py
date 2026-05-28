@@ -149,6 +149,14 @@ async def send_loop(
 
                 # 获取该群组的消息
                 if settings.ai_enabled and ai_sender is not None:
+                    # 检查上条消息是否仍在上下文（无人回复→跳过）
+                    try:
+                        if await ai_sender.should_skip(
+                            group, settings.ai_context_count
+                        ):
+                            continue
+                    except Exception:
+                        pass  # 检查失败不影响主流程
                     try:
                         message = await ai_sender.generate_message(
                             group, settings.ai_prompt, settings.ai_context_count

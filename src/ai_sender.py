@@ -21,6 +21,30 @@ class AISender:
         self._memory: dict[str, deque[str]] = {}  # group -> deque of own messages
         self._sent_texts: set[str] = set()  # 精确追踪 AI 自己发过的文本
 
+    async def should_skip(self, group: str, context_count: int = 5) -> bool:
+        """检查 AI 上一条消息是否仍在群聊最近消息中。
+        
+        如果是 → 说明无人回复，本轮跳过该群组。
+        
+        Args:
+            group: 目标群组标识。
+            context_count: 获取多少条最近消息来比较。
+            
+        Returns:
+            True 如果需要跳过该群组。
+        """
+        own_history = self._memory.get(group)
+        if not own_history:
+            return False
+        
+        last_reply = own_history[-1]
+        recent = await self._sender.get_recent_messages(group, limit=context_count)
+        for msg in recent:
+            if msg.text and msg.text.strip() == last_reply:
+                logger.info("⏭ 上条消息仍在上下文 [%s]: %s", group, last_reply[:30])
+                return True
+        return False
+
     async def generate_message(
         self, group: str, prompt: str, context_count: int
     ) -> str:
