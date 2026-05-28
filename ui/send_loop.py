@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any
 
 import flet as ft
 from telethon.errors import FloodWaitError, RPCError
+from telethon.tl.functions.messages import SetTypingRequest
+from telethon.tl.types import SendMessageTypingAction
 
 from src.config import Settings
 from src.interval import get_random_interval
@@ -183,9 +185,15 @@ async def send_loop(
                     typing_delay = random.randint(
                         settings.typing_delay_min, settings.typing_delay_max
                     )
-                    await sender._client.send_chat_action(
-                        entity=group, action="typing"
-                    )
+                    try:
+                        await sender._client(
+                            SetTypingRequest(
+                                peer=group,
+                                action=SendMessageTypingAction(),
+                            )
+                        )
+                    except Exception:
+                        pass  # typing 不是关键功能，忽略异常
                     await asyncio.sleep(typing_delay)
 
                 # ── 带重试的发送 ──
