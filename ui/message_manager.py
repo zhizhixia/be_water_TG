@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import logging
+
 from src.message_loader import load_messages, validate_messages
 from src.selector import MessageSelector
 
+logger = logging.getLogger(__name__)
+
 
 class MessageManager:
-    """管理多个群组的消息选择器，每个群组拥有独立的 MessageSelector 实例。"""
+    """管理多个群组的消息选择器，每个群组拥有独立的 MessageSelector 实例。
+    同一文件被多个群组引用时，只加载一次无需重复处理。
+    """
 
     def __init__(self, group_file_map: dict[str, str]) -> None:
         """初始化消息管理器。
@@ -22,11 +28,18 @@ class MessageManager:
             raise ValueError("群组映射不能为空")
 
         self._selectors: dict[str, MessageSelector] = {}
+        loaded_files: dict[str, MessageSelector] = {}  # 缓存已加载的 selector
 
         for group, file_path in group_file_map.items():
-            messages = load_messages(file_path)
-            validate_messages(messages)
-            self._selectors[group] = MessageSelector(messages)
+            if file_path in loaded_files:
+                self._selectors[group] = loaded_files[file_path]
+            else:
+                messages = load_messages(file_path)
+                validate_messages(messages)
+                selector = MessageSelector(messages)
+                self._selectors[group] = selector
+                loaded_files[file_path] = selector
+                logger.info("已加载 %d 条消息从: %s", len(messages), file_path)
 
     def get_message(self, group: str) -> str:
         """获取指定群组的下一条消息。
