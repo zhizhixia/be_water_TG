@@ -21,7 +21,7 @@ if not errorlevel 1 (
 echo [>>] Starting GUI...
 echo.
 
-D:\miniconda\envs\be_water\python.exe main.py
+D:\miniconda3\envs\be_water\python.exe main.py
 
 if errorlevel 1 (
     echo.
