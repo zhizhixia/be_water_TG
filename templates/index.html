@@ -1,0 +1,212 @@
+﻿{% extends "base.html" %}
+
+{% block config_panel %}
+<h2 class="panel-title">配置</h2>
+
+<form id="configForm" onsubmit="return false;">
+  <!-- 基础配置 -->
+  <details class="config-section" open>
+    <summary>🔑 基础配置</summary>
+    <div class="section-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label for="api_id">API ID</label>
+          <input type="text" id="api_id" placeholder="从 my.telegram.org 获取">
+        </div>
+        <div class="form-group">
+          <label for="api_hash">API Hash</label>
+          <input type="password" id="api_hash" placeholder="从 my.telegram.org 获取">
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="phone">手机号</label>
+        <input type="text" id="phone" placeholder="+8613800138000">
+      </div>
+      <div class="form-group">
+        <label for="target_groups">目标群组</label>
+        <textarea id="target_groups" rows="2" placeholder="逗号分隔。如: https://t.me/group1, https://t.me/group2"></textarea>
+      </div>
+    </div>
+  </details>
+
+  <!-- 发送设置 -->
+  <details class="config-section" open>
+    <summary>⚡ 发送设置</summary>
+    <div class="section-body">
+      <div class="form-row">
+        <div class="form-group">
+          <label for="min_interval">最小间隔（秒）</label>
+          <input type="number" id="min_interval" value="20">
+        </div>
+        <div class="form-group">
+          <label for="max_interval">最大间隔（秒）</label>
+          <input type="number" id="max_interval" value="30">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="proxy_host">代理地址（可选）</label>
+          <input type="text" id="proxy_host" placeholder="127.0.0.1">
+        </div>
+        <div class="form-group">
+          <label for="proxy_port">代理端口（可选）</label>
+          <input type="number" id="proxy_port" placeholder="7890">
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="proxy_type">代理类型</label>
+        <select id="proxy_type">
+          <option value="http">HTTP</option>
+          <option value="socks5">SOCKS5</option>
+          <option value="socks4">SOCKS4</option>
+        </select>
+      </div>
+    </div>
+  </details>
+
+  <!-- AI 配置 -->
+  <details class="config-section">
+    <summary>🤖 AI 智能聊天</summary>
+    <div class="section-body">
+      <div class="switch-row">
+        <label class="toggle">
+          <input type="checkbox" id="ai_enabled">
+          <span class="slider"></span>
+        </label>
+        <span class="toggle-label">AI 智能聊天模式</span>
+      </div>
+      <div class="form-group ai-field" style="display:none">
+        <label for="ai_api_key">AI API Key</label>
+        <input type="password" id="ai_api_key" placeholder="sk-your-api-key">
+      </div>
+      <div class="form-row ai-field" style="display:none">
+        <div class="form-group">
+          <label for="ai_base_url">AI Base URL</label>
+          <input type="text" id="ai_base_url" value="https://api.deepseek.com/v1">
+        </div>
+        <div class="form-group">
+          <label for="ai_model">AI 模型</label>
+          <input type="text" id="ai_model" value="deepseek-chat">
+        </div>
+      </div>
+      <div class="form-group ai-field" style="display:none">
+        <label for="ai_prompt">AI 系统提示词 (System Prompt)</label>
+        <textarea id="ai_prompt" rows="3"></textarea>
+      </div>
+      <div class="form-group ai-field" style="display:none">
+        <label for="ai_context_count">上下文消息数</label>
+        <input type="number" id="ai_context_count" value="5" min="1" max="20">
+      </div>
+    </div>
+  </details>
+
+  <!-- 定时运行 -->
+  <details class="config-section">
+    <summary>⏰ 定时运行</summary>
+    <div class="section-body">
+      <div class="switch-row">
+        <label class="toggle">
+          <input type="checkbox" id="schedule_enabled">
+          <span class="slider"></span>
+        </label>
+        <span class="toggle-label">定时运行窗口</span>
+      </div>
+      <div class="form-row schedule-field" style="display:none">
+        <div class="form-group">
+          <label for="schedule_morning_start">上午开始</label>
+          <input type="text" id="schedule_morning_start" value="08:00" placeholder="hh:mm">
+        </div>
+        <div class="form-group">
+          <label for="schedule_morning_end">上午结束</label>
+          <input type="text" id="schedule_morning_end" value="11:00" placeholder="hh:mm">
+        </div>
+      </div>
+      <div class="form-row schedule-field" style="display:none">
+        <div class="form-group">
+          <label for="schedule_afternoon_start">下午开始</label>
+          <input type="text" id="schedule_afternoon_start" value="14:00" placeholder="hh:mm">
+        </div>
+        <div class="form-group">
+          <label for="schedule_afternoon_end">下午结束</label>
+          <input type="text" id="schedule_afternoon_end" value="18:00" placeholder="hh:mm">
+        </div>
+      </div>
+    </div>
+  </details>
+
+  <!-- 反检测增强 -->
+  <details class="config-section">
+    <summary>🛡️ 反检测增强</summary>
+    <div class="section-body">
+      <div class="switch-row">
+        <label class="toggle">
+          <input type="checkbox" id="anti_detect">
+          <span class="slider"></span>
+        </label>
+        <span class="toggle-label">真人行为模拟（打字延迟、思考间隔、随机潜水）</span>
+      </div>
+      <div class="form-row anti-field" style="display:none">
+        <div class="form-group">
+          <label for="typing_delay_min">打字最短（秒）</label>
+          <input type="number" id="typing_delay_min" value="3">
+        </div>
+        <div class="form-group">
+          <label for="typing_delay_max">打字最长（秒）</label>
+          <input type="number" id="typing_delay_max" value="8">
+        </div>
+      </div>
+      <div class="form-row anti-field" style="display:none">
+        <div class="form-group">
+          <label for="thinking_delay_min">思考最短（秒）</label>
+          <input type="number" id="thinking_delay_min" value="5">
+        </div>
+        <div class="form-group">
+          <label for="thinking_delay_max">思考最长（秒）</label>
+          <input type="number" id="thinking_delay_max" value="25">
+        </div>
+      </div>
+      <div class="form-group anti-field" style="display:none">
+        <label for="skip_round_pct">潜水概率（%）</label>
+        <input type="number" id="skip_round_pct" value="10" min="0" max="100">
+      </div>
+    </div>
+  </details>
+
+  <!-- 消息文件 -->
+  <details class="config-section">
+    <summary>📄 消息文件</summary>
+    <div class="section-body">
+      <p style="color:var(--text-secondary);font-size:12px;margin-bottom:12px;">每个群组单独指定消息内容文件路径</p>
+      <div id="message-files-area">
+        <p style="color:var(--text-muted);font-size:12px;font-style:italic;">输入目标群组链接后，此处将显示文件路径输入</p>
+      </div>
+    </div>
+  </details>
+
+  <div class="form-actions">
+    <button type="button" class="btn btn-secondary" onclick="loadConfig()">📂 加载配置</button>
+    <button type="button" class="btn btn-primary" onclick="saveConfig()">💾 保存配置</button>
+  </div>
+  <div class="form-status" id="configStatus"></div>
+</form>
+{% endblock %}
+
+{% block log_panel %}
+<h2 class="panel-title">运行日志</h2>
+
+<div class="log-header" id="logHeader">
+  <span class="counter-item">总计: <strong id="totalCountDetail">0</strong> 条</span>
+  <span id="perGroupCounts"></span>
+</div>
+
+<div class="log-terminal" id="logTerminal">
+  <span class="log-entry">等待启动...</span>
+</div>
+
+<div class="code-area" id="codeArea">
+  <div class="code-row">
+    <input type="text" id="codeInput" placeholder="请输入 Telegram 验证码..." autocomplete="off">
+    <button class="btn btn-code" onclick="submitCode()">提交</button>
+  </div>
+</div>
+{% endblock %}

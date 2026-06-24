@@ -1,96 +1,98 @@
-# AGENTS.md — be_water_TG
+﻿# AGENTS.md — be_water_TG
 
 ## 环境
 
-- **Conda 环境**: `be_water`，Python 3.13，路径 `D:\miniconda\envs\be_water\python.exe`
-- 双击 `run.bat` 即可启动 GUI
+- **Conda 环境**: `be_water`，Python 3.13，路径 `D:\miniconda3\envs\be_water\python.exe`
+- 双击 `run.bat` 即可启动 Web UI（浏览器自动打开 http://127.0.0.1:5000）
 
 ## 项目概要
 
-Telegram 多群组自动灌水工具，Flet（桌面 GUI）+ Telethon（MTProto 客户端）+ python-dotenv（配置）。Python 3.12+，仅 Windows 平台。
+Telegram 多群组自动灌水工具，Flask（Web GUI）+ Telethon（MTProto 客户端）+ python-dotenv（配置）。支持 AI 聊天模式（DeepSeek API）、定时运行窗口、反检测增强。Python 3.12+，仅 Windows 平台。
 
 ## 命令
 
 ```bash
-# 运行桌面 GUI
+# 启动 Web UI
 python main.py
 
-# 浏览器模式
-python main.py --web
-
-# 运行全部测试（47 条，约 0.15s）
+# 运行全部测试
 pytest tests/ -v
 
-# 安装依赖
-pip install -r requirements.txt
+# 仅跑不依赖 openai/flet 的测试
+pytest tests/ -v --ignore=tests/test_ai_client.py --ignore=tests/test_control_panel.py
 ```
 
 ## 架构
 
 ```
-main.py              → Flet 入口（--web 用 ft.app / 桌面用 ft.run）
-ui/app.py            → 主窗口布局 + 组件连线 + 发送逻辑
-ui/config_form.py    → 左侧配置表单（加载/保存 .env）
-ui/control_panel.py  → 底部按钮面板（AppState 状态机）
-ui/status_panel.py   → 右侧日志面板 + 验证码输入（GUIHandler 桥接 logging）
-ui/send_loop.py      → 多群组异步发送主循环（SendState 状态机）
-ui/message_manager.py → 每群组独立 MessageSelector 管理器
+main.py              → Flask 入口（启动开发服务器）
+web_app.py           → Flask 应用 + 路由注册（/api/config, /api/start 等）
+web_manager.py       → EventBus + SendLoopManager + LogQueueHandler
+templates/
+  base.html          → 基础布局（侧栏 + 主内容区）
+  index.html         → 配置面板 + 运行日志面板
+static/
+  css/style.css      → 暗色主题样式
+  js/app.js          → SSE 连接、表单交互、UI 控制
 
-src/config.py        → Settings dataclass + load/save .env
+src/config.py        → Settings dataclass + load/save .env（配置校验）
 src/sender.py        → Telethon 客户端封装（connect/login/send/disconnect）
 src/selector.py      → 随机选消息，避免连续重复
 src/interval.py      → 随机间隔生成 + 中文时间格式化
-src/group_parser.py  → 群组链接解析（@username / t.me / https 三种格式 + 中英文逗号）
+src/group_parser.py  → 群组链接解析（@username / t.me / https 三种格式）
 src/message_loader.py → 消息文件解析（逗号分隔）
 src/logger.py        → 日志工厂函数（含 handler 去重）
+src/ai_client.py     → DeepSeek LLM 客户端（openai SDK 封装）
+src/ai_sender.py     → AI 消息生成器（群聊上下文 + 短期记忆 + 去重）
+ui/send_loop.py      → 多群组异步发送主循环（SendState 状态机）
+ui/message_manager.py → 每群组独立 MessageSelector 管理器
 ```
 
-**控制流**：GUI Start → load_settings → MessageManager（加载消息文件）→ TelegramSender.start（登录）→ send_loop 异步循环（每轮向所有群组各发一条 → 随机间隔 → 重复）。
+### Web 架构说明
 
-**发送循环**：`send_loop.py` 由 `page.run_task()` 运行在 Flet 事件循环上，禁止直接 `asyncio.run()`。暂停 = 完成当前轮次后挂起；停止 = 立即退出循环并断开连接。重试策略：3 次，退避 [30, 60, 120] 秒。
+- **实时通信**：Server-Sent Events (SSE)，端点 GET /api/events
+- **发送循环**：后台 threading.Thread 运行 asyncio event loop，通过 EventBus 桥接日志到 SSE
+- **状态管理**：SendLoopManager 全局单例管理发送循环生命周期
+- **日志桥接**：LogQueueHandler 将 Python logging 自动路由到 Web 前端
 
-## 代码风格
+**控制流**：双击 run.bat → Flask 启动 → 浏览器打开配置页 → Start → 后台线程启动 send_loop → SSE 推送实时日志到浏览器终端。
 
-- 全部文件使用 `from __future__ import annotations`
-- 类型注解用 Python 3.12 语法：`str | None`（不用 `Optional[str]`）、`list[str]`（不用 `List[str]`）
-- `dataclass` 用于配置和状态对象（Settings、SendState）
-- 每个模块顶部：`logger = logging.getLogger(__name__)`
-- 日志中文输出
-- 注释为中文
-- 测试用 pytest，`monkeypatch` 隔离环境变量，`tmp_path` 创建临时文件
-- 无 formatter/linter 配置 — 手动保持一致即可
+### 路由一览
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/` | 主页面 |
+| GET | `/api/config` | 加载 .env 配置 |
+| POST | `/api/config` | 保存配置到 .env |
+| POST | `/api/start` | 启动发送循环 |
+| POST | `/api/pause` | 暂停（完成当前轮次后） |
+| POST | `/api/resume` | 恢复发送 |
+| POST | `/api/stop` | 停止发送 |
+| GET | `/api/events` | SSE 实时推送端点 |
+| POST | `/api/code` | 提交 Telegram 验证码 |
 
 ## 陷阱与注意事项
 
-### 代理类型硬编码
-`src/sender.py:43` 中代理类型固定为 `("http", ...)`，不支持 SOCKS5。README 声称支持 SOCKS5 是假的 — 如需 SOCKS5，需自行修改该行。
-
 ### run.bat 硬编码 Python 路径
-`run.bat:24` 写死了 `D:\miniconda\envs\be_water\python.exe`。修改或部署到其他机器时需要调整。
+`run.bat:24` 写死了 `D:\miniconda3\envs\be_water\python.exe`。修改或部署到其他机器时需要调整。
+
+### 代理配置
+代理类型通过 `PROXY_TYPE` 环境变量控制（默认 `"http"`）。`src/sender.py:42` 读取 `settings.proxy_type`，支持任意 Telethon 支持的代理类型（http、socks5 等）。`requirements.txt` 已包含 `python-socks[asyncio]`，SOCKS5 可正常使用。需同时设置 `PROXY_HOST` 和 `PROXY_PORT`，缺一不可。
+
+### 发送循环线程模型
+send_loop 运行在后台 daemon 线程中。Flask 主进程退出时线程自动终止。不要在同一个浏览器打开多个标签页操作同一个进程（无隔离）。
+
+### 页面刷新不中断发送
+页面刷新后 SSE 重新连接，发送循环继续在后台运行。需要在侧栏重新查看状态。
 
 ### TARGET_GROUP 向后兼容
 `.env` 中 `TARGET_GROUP`（单数）已废弃但保留兼容。`config.py` 的 `load_settings()` 和 `save_settings()` 都处理了新旧两种 key 的互转逻辑。新增功能只使用 `TARGET_GROUPS`（复数）。
 
-### 中文逗号支持
-群组链接和消息文件都支持中文逗号（`，`）作为分隔符。`parse_group_links()` 和 `load_messages()` 都在内部做了 `replace("，", ",")` 转换。
+### MESSAGE_FILES 分隔符
+格式使用 `|` 分隔群组和文件路径。旧格式 `:` 仍兼容。
 
 ### Session 文件安全
-登录后生成的 `sender_session.session` 包含登录令牌，`.gitignore` 中已排除。首次运行需要手机验证码（GUI 内输入或 CLI `input()`）。
+登录后生成的 `sender_session.session` 包含登录令牌，`.gitignore` 中已排除。首次运行需要手机验证码（Web 界面内输入）。
 
-### Flet 异步模型
-所有 UI 回调在 Flet 事件循环上运行。长时间操作（如发送循环）用 `page.run_task()` 执行。不要在 Flet 回调中调用 `asyncio.run()`。
-
-### pytest 配置
-`pytest.ini` 禁用了 `remotedata` 插件（`-p no:remotedata`），测试不依赖网络。
-
-### 不直接修改 .env.pytest
-测试中通过 `monkeypatch.setattr("src.config.load_dotenv", ...)` 阻断 `.env` 文件加载，然后用 `monkeypatch.setenv()` 注入环境变量 — 不要尝试创建 `.env.pytest`。
-
-## 关键文件
-
-| 文件 | 作用 |
-|------|------|
-| `src/config.py:36 load_settings()` | 从环境变量构建 Settings，含所有校验逻辑 |
-| `ui/send_loop.py:36 send_loop()` | 发送主循环，通过 SendState.stopped/paused 控制 |
-| `ui/app.py:80 start_sending()` | 串联配置加载→登录→发送循环的入口 |
-| `ui/status_panel.py:11 GUIHandler` | 将 Python logging 桥接到 Flet GUI |
+### AI 模式需手动安装 openai
+`openai>=1.0.0` 在 `requirements.txt` 中。跑 AI 相关测试前确认 `pip install openai`。

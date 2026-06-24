@@ -1,0 +1,64 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Telegram 灌水工具</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div class="app-layout">
+    <!-- 侧栏 -->
+    <aside class="sidebar">
+      <div class="sidebar-logo">
+        <span class="logo-icon">🚀</span>
+        <div>
+          <h1>Telegram 灌水</h1>
+          <div class="subtitle">多群组自动发送</div>
+        </div>
+      </div>
+
+      <div class="status-indicator">
+        <span class="status-dot idle" id="statusDot"></span>
+        <span id="statusText">就绪</span>
+      </div>
+
+      <nav class="nav-menu">
+        <button class="nav-item active" data-panel="config">
+          <span class="nav-icon">⚙</span> 配置
+        </button>
+        <button class="nav-item" data-panel="log">
+          <span class="nav-icon">📋</span> 运行日志
+        </button>
+      </nav>
+
+      <div class="control-buttons" id="controlButtons">
+        <button class="ctrl-btn start" id="btnStart" onclick="sendRequest('/api/start')">▶ 开始发送</button>
+        <button class="ctrl-btn pause" id="btnPause" style="display:none" onclick="sendRequest('/api/pause')">⏸ 暂停</button>
+        <button class="ctrl-btn resume" id="btnResume" style="display:none" onclick="sendRequest('/api/resume')">▶ 继续</button>
+        <button class="ctrl-btn stop" id="btnStop" style="display:none" onclick="sendRequest('/api/stop')">⏹ 停止</button>
+      </div>
+
+      <div class="sidebar-stats">
+        <div class="stat-item">已发送: <span class="stat-value" id="totalCount">0</span> 条</div>
+        <div class="stat-item" id="countdownItem" style="display:none">下一轮: <span class="stat-countdown" id="countdownText">--</span></div>
+      </div>
+    </aside>
+
+    <!-- 主内容区 -->
+    <main class="main-content">
+      <div class="panel active" id="panelConfig">
+        {% block config_panel %}{% endblock %}
+      </div>
+      <div class="panel" id="panelLog">
+        {% block log_panel %}{% endblock %}
+      </div>
+    </main>
+  </div>
+
+  <!-- Toast 消息提示 -->
+  <div class="toast" id="toast"></div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

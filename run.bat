@@ -18,8 +18,10 @@ if not errorlevel 1 (
     echo [--] Using direct Python path
 )
 
-echo [>>] Starting GUI...
+echo [>>] Starting Web UI (http://127.0.0.1:5000)...
 echo.
+
+start http://127.0.0.1:5000
 
 D:\miniconda3\envs\be_water\python.exe main.py
 
