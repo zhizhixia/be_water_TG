@@ -99,10 +99,8 @@ class TelegramSender:
             await self._client.send_message(target, text)
             logger.info("✅ 已发送: %r → %s", text[:30], target)
         except FloodWaitError as e:
-            logger.warning(
-                "⚠️ 触发 FloodWait，需要等待 %d 秒", e.seconds
-            )
-            await asyncio.sleep(e.seconds)
+            # 策略上移至 send_loop：这里仅记录并立即 raise，不再自行 sleep
+            logger.warning("⚠️ 触发 FloodWait，需要等待 %d 秒", e.seconds)
             raise
         except ConnectionError as e:
             logger.error("❌ 网络连接异常: %s", e)
