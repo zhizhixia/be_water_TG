@@ -45,6 +45,16 @@
       </div>
       <div class="form-row">
         <div class="form-group">
+          <label for="group_gap_min">群组间隔下限（秒）</label>
+          <input type="number" id="group_gap_min" value="1" min="0" max="3600">
+        </div>
+        <div class="form-group">
+          <label for="group_gap_max">群组间隔上限（秒）</label>
+          <input type="number" id="group_gap_max" value="1" min="0" max="3600">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
           <label for="proxy_host">代理地址（可选）</label>
           <input type="text" id="proxy_host" placeholder="127.0.0.1">
         </div>

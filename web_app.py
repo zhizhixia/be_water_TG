@@ -67,6 +67,8 @@ def api_config_get():
                 "thinking_delay_min": settings.thinking_delay_min,
                 "thinking_delay_max": settings.thinking_delay_max,
                 "skip_round_pct": settings.skip_round_pct,
+                "group_gap_min": settings.group_gap_min,
+                "group_gap_max": settings.group_gap_max,
             },
         })
     except Exception as ex:
@@ -114,8 +116,8 @@ def api_config_save():
             thinking_delay_min=int(data.get("thinking_delay_min", 5)),
             thinking_delay_max=int(data.get("thinking_delay_max", 25)),
             skip_round_pct=int(data.get("skip_round_pct", 10)),
-            group_gap_min=1,
-            group_gap_max=1,
+            group_gap_min=int(data.get("group_gap_min", 1)),
+            group_gap_max=int(data.get("group_gap_max", 1)),
         )
         save_settings(settings)
         return jsonify({"success": True})

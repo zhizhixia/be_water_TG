@@ -252,6 +252,8 @@ async function loadConfig() {
     document.getElementById('target_groups').value = (c.target_groups || []).join(', ');
     document.getElementById('min_interval').value = c.min_interval || 60;
     document.getElementById('max_interval').value = c.max_interval || 180;
+    document.getElementById('group_gap_min').value = c.group_gap_min != null ? c.group_gap_min : 1;
+    document.getElementById('group_gap_max').value = c.group_gap_max != null ? c.group_gap_max : 1;
     document.getElementById('proxy_host').value = c.proxy_host || '';
     document.getElementById('proxy_port').value = c.proxy_port || '';
     document.getElementById('proxy_type').value = c.proxy_type || 'http';
@@ -313,6 +315,8 @@ async function saveConfig() {
     target_groups: groups,
     min_interval: parseInt(document.getElementById('min_interval').value) || 60,
     max_interval: parseInt(document.getElementById('max_interval').value) || 180,
+    group_gap_min: parseInt(document.getElementById('group_gap_min').value) || 1,
+    group_gap_max: parseInt(document.getElementById('group_gap_max').value) || 1,
     proxy_host: document.getElementById('proxy_host').value.trim() || null,
     proxy_port: document.getElementById('proxy_port').value ? parseInt(document.getElementById('proxy_port').value) : null,
     proxy_type: document.getElementById('proxy_type').value,
