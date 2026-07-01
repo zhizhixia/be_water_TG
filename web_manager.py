@@ -28,6 +28,8 @@ class EventBus:
     HISTORY_CAPACITY = 500
     # 每个订阅者队列容量
     SUBSCRIBER_QUEUE_SIZE = 500
+    # 验证码输入超时秒数——超时后放弃登录并转 STOPPED
+    CODE_TIMEOUT = 120
 
     def __init__(self) -> None:
         self._lock = Lock()
@@ -95,8 +97,17 @@ class EventBus:
         future: Future = Future()
         self._code_future = future
         await self.emit_code_required()
-        code = await loop.run_in_executor(None, future.result)
-        self._code_future = None
+        try:
+            code = await loop.run_in_executor(
+                None, lambda: future.result(timeout=self.CODE_TIMEOUT)
+            )
+        except TimeoutError:
+            # concurrent.futures.Future.result 超时抛 TimeoutError（Python 3.13 中等同于 asyncio.TimeoutError）
+            # 转换为 asyncio.TimeoutError 以便上层统一处理
+            await self.emit_log("error", "验证码输入超时，请停止后重新启动")
+            raise asyncio.TimeoutError("验证码输入超时")
+        finally:
+            self._code_future = None
         return code
 
     def submit_code(self, code: str) -> bool:
@@ -273,7 +284,12 @@ class SendLoopManager:
         self._loop = loop
 
         async def _start():
-            await sender.start(code_callback=self._event_bus.wait_for_code)
+            try:
+                await sender.start(code_callback=self._event_bus.wait_for_code)
+            except asyncio.TimeoutError:
+                logger.warning("验证码超时，发送循环将停止")
+                # 不进入 send_loop，直接退出 → _run_loop finally 会 transition(STOPPED)
+                return
             run_result = self.transition(SendState.RUNNING)
             if not run_result.ok:
                 logger.warning("启动中途状态已变，中止 send_loop: %s", run_result.reason)
