@@ -193,21 +193,38 @@ def api_stop():
 
 @app.route("/api/events")
 def api_events():
-    """SSE 端点：推送实时日志、状态、计数器"""
+    """SSE 端点：推送实时日志、状态、计数器。
+
+    支持 Last-Event-ID 请求头与 ?last_event_id= 查询参数，
+    浏览器重连或刷新后可从断点续推历史事件。
+    """
+    # 头部优先级低于查询参数：查询参数显式时优先
+    last_id_header = request.headers.get("Last-Event-ID", "")
+    last_id_query = request.args.get("last_event_id", "")
+    raw = last_id_query or last_id_header or "0"
+    try:
+        last_seq = int(raw)
+    except (TypeError, ValueError):
+        last_seq = 0
 
     def generate():
         event_bus = manager.event_bus
-        # 先推送当前状态
+        q = event_bus.subscribe(last_seq=last_seq)
+        # 推送当前状态作为首条（用 id: 0 占位，避免与真实历史 seq 冲突）
         state = event_bus.get_current_state()
-        yield f"data: {json.dumps({'type': 'status', 'data': {'state': state}})}\n\n"
-
-        while True:
-            event = event_bus.get_event(timeout=30)
-            if event is None:
-                # 发送心跳保持连接
-                yield ": heartbeat\n\n"
-                continue
-            yield f"data: {json.dumps(event)}\n\n"
+        yield f"id: 0\ndata: {json.dumps({'type': 'status', 'data': {'state': state}})}\n\n"
+        try:
+            while True:
+                try:
+                    seq, data = q.get(timeout=30)
+                except Exception:
+                    # queue.Empty 等：发心跳保持连接
+                    yield ": heartbeat\n\n"
+                    continue
+                yield f"id: {seq}\ndata: {json.dumps(data)}\n\n"
+        finally:
+            # 客户端断开 / generator 被 GC 时触发，保证不泄漏订阅者
+            event_bus.unsubscribe(q)
 
     return Response(
         generate(),
