@@ -243,3 +243,27 @@ class TestSaveSettingsRoundTrip:
         lines = [l.strip() for l in content.splitlines() if l.strip()]
         tg_line = next(l for l in lines if l.startswith("TARGET_GROUPS="))
         assert tg_line.count(",") == 0
+
+
+class TestGroupGap:
+    """GROUP_GAP_MIN/MAX 配置项读写测试。"""
+
+    def test_default_group_gap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """未设置 env 时 group_gap 取默认值 1/1。"""
+        set_required_env(monkeypatch)
+        monkeypatch.setenv("TARGET_GROUPS", "https://t.me/a")
+        monkeypatch.delenv("GROUP_GAP_MIN", raising=False)
+        monkeypatch.delenv("GROUP_GAP_MAX", raising=False)
+        settings = load_settings()
+        assert settings.group_gap_min == 1
+        assert settings.group_gap_max == 1
+
+    def test_custom_group_gap(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """env 设置后正确解析为整数。"""
+        set_required_env(monkeypatch)
+        monkeypatch.setenv("TARGET_GROUPS", "https://t.me/a")
+        monkeypatch.setenv("GROUP_GAP_MIN", "5")
+        monkeypatch.setenv("GROUP_GAP_MAX", "15")
+        settings = load_settings()
+        assert settings.group_gap_min == 5
+        assert settings.group_gap_max == 15

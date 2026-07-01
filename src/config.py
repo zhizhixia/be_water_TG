@@ -50,6 +50,10 @@ class Settings:
     thinking_delay_max: int = 25
     skip_round_pct: int = 10
 
+    # 群组间发送间隔（秒），用于控制每轮内向不同群组发送之间的最小/最大等待
+    group_gap_min: int = 1
+    group_gap_max: int = 1
+
     def __post_init__(self) -> None:
         """同步 target_group 与 target_groups 以保持向后兼容。"""
         if self.target_groups and not self.target_group:
@@ -193,6 +197,13 @@ def load_settings() -> Settings:
     thinking_delay_min = int(os.getenv("THINKING_DELAY_MIN", "5"))
     thinking_delay_max = int(os.getenv("THINKING_DELAY_MAX", "25"))
     skip_round_pct = int(os.getenv("SKIP_ROUND_PCT", "10"))
+    group_gap_min = int(os.getenv("GROUP_GAP_MIN", "1"))
+    group_gap_max = int(os.getenv("GROUP_GAP_MAX", "1"))
+
+    if group_gap_max < group_gap_min:
+        raise ValueError(
+            f"GROUP_GAP_MAX ({group_gap_max}) must be >= GROUP_GAP_MIN ({group_gap_min})"
+        )
 
     return Settings(
         api_id=api_id,
@@ -223,6 +234,8 @@ def load_settings() -> Settings:
         thinking_delay_min=thinking_delay_min,
         thinking_delay_max=thinking_delay_max,
         skip_round_pct=skip_round_pct,
+        group_gap_min=group_gap_min,
+        group_gap_max=group_gap_max,
     )
 
 
@@ -281,6 +294,10 @@ def save_settings(settings: Settings, path: str | None = None) -> None:
         new_values["THINKING_DELAY_MAX"] = str(settings.thinking_delay_max)
     if settings.skip_round_pct != 10:
         new_values["SKIP_ROUND_PCT"] = str(settings.skip_round_pct)
+    if settings.group_gap_min != 1:
+        new_values["GROUP_GAP_MIN"] = str(settings.group_gap_min)
+    if settings.group_gap_max != 1:
+        new_values["GROUP_GAP_MAX"] = str(settings.group_gap_max)
 
     env_path = Path(path)
     lines: list[str] = []
