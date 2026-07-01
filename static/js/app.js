@@ -1,12 +1,19 @@
-﻿// ===== SSE 连接 =====
+// ===== SSE 连接 =====
 let evtSource = null;
+let sseErrorNotified = false;
 
 function connectSSE() {
   if (evtSource) evtSource.close();
-  evtSource = new EventSource('/api/events');
+  const lastId = localStorage.getItem('sse_last_id') || '';
+  const url = lastId ? '/api/events?last_event_id=' + encodeURIComponent(lastId) : '/api/events';
+  evtSource = new EventSource(url);
 
   evtSource.onmessage = function(event) {
     try {
+      if (event.lastEventId) {
+        localStorage.setItem('sse_last_id', event.lastEventId);
+      }
+      sseErrorNotified = false;
       const msg = JSON.parse(event.data);
       switch (msg.type) {
         case 'log': appendLog(msg.data.level, msg.data.message); break;
@@ -19,7 +26,11 @@ function connectSSE() {
   };
 
   evtSource.onerror = function() {
-    // 连接断开时自动重连（EventSource 内置）
+    // EventSource 会自动重连；连续失败时给用户一次提示，避免刷屏
+    if (!sseErrorNotified) {
+      sseErrorNotified = true;
+      showToast('实时日志连接断开，正在尝试重连...', 'warning');
+    }
   };
 }
 
@@ -48,18 +59,23 @@ function updateStatus(state) {
 
   const statusMap = {
     idle: '就绪',
+    starting: '启动中...',
     running: '运行中...',
     paused: '已暂停',
-    pausing: '暂停中...'
+    pausing: '暂停中...',
+    stopping: '停止中...',
+    stopped: '已停止',
+    waiting_code: '等待验证码...'
   };
   text.textContent = statusMap[state] || state;
 
   // 控制按钮显隐
-  document.getElementById('btnStart').style.display = state === 'idle' ? '' : 'none';
+  document.getElementById('btnStart').style.display =
+    (state === 'idle' || state === 'stopped') ? '' : 'none';
   document.getElementById('btnPause').style.display = state === 'running' ? '' : 'none';
   document.getElementById('btnResume').style.display = state === 'paused' ? '' : 'none';
   document.getElementById('btnStop').style.display =
-    (state === 'running' || state === 'pausing' || state === 'paused') ? '' : 'none';
+    (state === 'starting' || state === 'running' || state === 'pausing' || state === 'paused' || state === 'waiting_code') ? '' : 'none';
 }
 
 // ===== 计数器 =====
@@ -101,16 +117,25 @@ function showCodeInput() {
   document.getElementById('codeInput').focus();
 }
 
-function submitCode() {
+async function submitCode() {
   const code = document.getElementById('codeInput').value.trim();
   if (!code) return;
-  fetch('/api/code', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({code: code})
-  });
-  document.getElementById('codeInput').value = '';
-  document.getElementById('codeArea').classList.remove('visible');
+  try {
+    const resp = await fetch('/api/code', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({code: code})
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data.success) {
+      showToast(data.error || '验证码提交失败', 'error');
+      return;
+    }
+    document.getElementById('codeInput').value = '';
+    document.getElementById('codeArea').classList.remove('visible');
+  } catch(e) {
+    showToast('网络错误: ' + e.message, 'error');
+  }
 }
 
 // 回车提交验证码
@@ -125,7 +150,9 @@ async function sendRequest(url) {
   try {
     const resp = await fetch(url, {method: 'POST'});
     const data = await resp.json();
-    if (!data.success) showToast(data.error || '操作失败', 'error');
+    if (!resp.ok || !data.success) {
+      showToast(data.error || '操作失败', 'error');
+    }
   } catch(e) {
     showToast('网络错误: ' + e.message, 'error');
   }
@@ -183,6 +210,13 @@ function rebuildMessageFiles() {
   const area = document.getElementById('message-files-area');
   const text = document.getElementById('target_groups').value;
   const groups = text.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+
+  // 保留已填写的路径，避免编辑群组时丢失用户输入
+  const existing = {};
+  area.querySelectorAll('input[id^="file_"]').forEach(input => {
+    existing[input.id] = input.value;
+  });
+
   if (!groups.length) {
     area.innerHTML = '<p style="color:var(--text-muted);font-size:12px;font-style:italic;">输入目标群组链接后，此处将显示文件路径输入</p>';
     return;
@@ -191,12 +225,19 @@ function rebuildMessageFiles() {
   for (const g of groups) {
     const name = g.replace(/\/+$/, '').split('/').pop() || g;
     const fieldId = 'file_' + name.replace(/[^a-zA-Z0-9]/g, '_');
+    const savedValue = existing[fieldId] ? ` value="${escapeHtml(existing[fieldId])}"` : '';
     html += '<div class="file-row form-group">';
     html += `<label for="${fieldId}">消息文件 (${name.substring(0, 20)})</label>`;
-    html += `<input type="text" id="${fieldId}" placeholder="如 messages_${name}.txt">`;
+    html += `<input type="text" id="${fieldId}" placeholder="如 messages_${name}.txt"${savedValue}>`;
     html += '</div>';
   }
   area.innerHTML = html;
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
 }
 
 async function loadConfig() {
@@ -249,7 +290,6 @@ async function loadConfig() {
       }
     }
 
-    showToast('✅ 配置已加载', 'success');
   } catch(e) {
     showToast('加载失败: ' + e.message, 'error');
   }
@@ -314,12 +354,30 @@ async function saveConfig() {
 }
 
 // ===== Toast =====
+const toastQueue = [];
+let toastShowing = false;
+
 function showToast(msg, type) {
+  toastQueue.push({msg, type});
+  if (!toastShowing) showNextToast();
+}
+
+function showNextToast() {
+  if (!toastQueue.length) {
+    toastShowing = false;
+    return;
+  }
+  toastShowing = true;
+  const {msg, type} = toastQueue.shift();
   const toast = document.getElementById('toast');
   toast.textContent = msg;
   toast.className = 'toast ' + type + ' show';
   clearTimeout(toast._hide);
-  toast._hide = setTimeout(() => { toast.classList.remove('show'); }, 3000);
+  toast._hide = setTimeout(() => {
+    toast.classList.remove('show');
+    // 等淡出动画结束再显示下一条（若 CSS 无淡出动画则立即）
+    setTimeout(showNextToast, 150);
+  }, 3000);
 }
 
 // ===== 初始化 =====
