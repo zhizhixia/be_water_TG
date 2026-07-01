@@ -17,7 +17,7 @@ from src.sender import TelegramSender
 from ui.message_manager import MessageManager
 
 if TYPE_CHECKING:
-    from web_manager import EventBus
+    from web_manager import EventBus, SendLoopManager
     from src.ai_sender import AISender
 
 logger = logging.getLogger(__name__)
@@ -44,10 +44,24 @@ class SendState(Enum):
     WAITING_CODE = "waiting_code"
 
 
+@dataclass
+class SendRuntime:
+    """发送循环运行时状态：由 SendLoopManager 持有，send_loop 读写。
+
+    与 SendState 枚举分离：枚举描述状态机阶段，本类承载计数等运行数据。
+    所有字段读写应在 manager._state_lock 下进行。
+    """
+    stopped: bool = False
+    paused: bool = False
+    total_count: int = 0
+    per_group_counts: dict[str, int] = field(default_factory=dict)
+    on_paused_callback: Callable[..., Any] | None = field(default=None)
+
+
 async def send_loop(
     sender: TelegramSender,
     settings: Settings,
-    state: SendState,
+    manager: "SendLoopManager",
     message_manager: MessageManager,
     event_bus: EventBus | None = None,
     ai_sender: AISender | None = None,
@@ -55,24 +69,24 @@ async def send_loop(
     """多群组异步发送主循环。
 
     通过后台线程的 asyncio event loop 运行。
-    支持定时窗口、AI 模式、反检测增强。
-
-    控制语义：
-    - stopped: 退出循环
-    - paused: 完成当前轮后挂起
+    停止信号由 manager.stop_event 提供，可在 FloodWait 等待期间被中断。
     """
+    stop_event = manager.stop_event
+    runtime = SendRuntime()
+    # 兼容旧变量名引用，便于最小改动函数体内部
+    state = runtime
 
     # 初始化每群组计数器
     for group in settings.target_groups:
-        if group not in state.per_group_counts:
-            state.per_group_counts[group] = 0
+        if group not in runtime.per_group_counts:
+            runtime.per_group_counts[group] = 0
 
     paused_notified = False
     schedule_wait_count = 0
 
-    while not state.stopped:
+    while not stop_event.is_set():
         # ---- 定时窗口检查 ----
-        if settings.schedule_enabled and not state.stopped:
+        if settings.schedule_enabled and not stop_event.is_set():
             now = datetime.now().time()
             in_morning = (
                 time.fromisoformat(settings.schedule_morning_start)
@@ -88,12 +102,12 @@ async def send_loop(
                 schedule_wait_count += 1
                 if schedule_wait_count > 120:
                     logger.warning("已等待超 2 小时，自动暂停，请手动恢复")
-                    if not state.paused:
-                        state.paused = True
-                    if state.on_paused_callback:
-                        state.on_paused_callback()
+                    if not runtime.paused:
+                        runtime.paused = True
+                    if runtime.on_paused_callback:
+                        runtime.on_paused_callback()
                     schedule_wait_count = 0
-                if not state.paused:
+                if not runtime.paused:
                     logger.info("不在允许时间段内，等待 60 秒后重检...")
                 await asyncio.sleep(60)
                 continue
@@ -101,14 +115,14 @@ async def send_loop(
                 schedule_wait_count = 0
 
         # ---- 暂停检查 ----
-        while state.paused and not state.stopped:
-            if not paused_notified and state.on_paused_callback:
-                state.on_paused_callback()
+        while runtime.paused and not stop_event.is_set():
+            if not paused_notified and runtime.on_paused_callback:
+                runtime.on_paused_callback()
                 paused_notified = True
             await asyncio.sleep(1)
         paused_notified = False
 
-        if state.stopped:
+        if stop_event.is_set():
             break
 
         # ---- 反检测：潜水回合 ----
@@ -122,7 +136,7 @@ async def send_loop(
                 await event_bus.emit_countdown(0)
         else:
             # ---- 反检测：思考延迟 ----
-            if not state.stopped and settings.anti_detect:
+            if not stop_event.is_set() and settings.anti_detect:
                 think = random.randint(
                     settings.thinking_delay_min, settings.thinking_delay_max
                 )
@@ -131,7 +145,7 @@ async def send_loop(
 
             # ---- 一轮：向每个群组发一条 ----
             for group in settings.target_groups:
-                if state.stopped:
+                if stop_event.is_set():
                     break
 
                 if settings.ai_enabled and ai_sender is not None:
@@ -183,17 +197,17 @@ async def send_loop(
                 for attempt in range(MAX_RETRIES):
                     try:
                         await sender.send_message(message, target_group=group)
-                        state.per_group_counts[group] += 1
-                        state.total_count += 1
+                        runtime.per_group_counts[group] += 1
+                        runtime.total_count += 1
                         logger.info(
                             "[%s] 已发送 (本组: %d, 总计: %d)",
                             group,
-                            state.per_group_counts[group],
-                            state.total_count,
+                            runtime.per_group_counts[group],
+                            runtime.total_count,
                         )
                         sent = True
                         if event_bus:
-                            await event_bus.emit_counter(state.total_count, state.per_group_counts)
+                            await event_bus.emit_counter(runtime.total_count, runtime.per_group_counts)
                         break
                     except FloodWaitError as e:
                         flood_retries += 1
@@ -228,7 +242,7 @@ async def send_loop(
                         logger.exception("未知错误 [%s]", group)
                         break
 
-                if not sent and not state.stopped:
+                if not sent and not stop_event.is_set():
                     logger.error(
                         "[%s] 发送失败 (已达最大重试次数 %d)，等待 %d 秒后继续",
                         group, MAX_RETRIES, RETRY_FAIL_WAIT,
@@ -236,14 +250,14 @@ async def send_loop(
                     if event_bus:
                         await event_bus.emit_countdown(RETRY_FAIL_WAIT)
                     waited = 0
-                    while waited < RETRY_FAIL_WAIT and not state.stopped:
+                    while waited < RETRY_FAIL_WAIT and not stop_event.is_set():
                         await asyncio.sleep(1)
                         waited += 1
                         if event_bus:
                             await event_bus.emit_countdown(RETRY_FAIL_WAIT - waited)
 
                 # 群组间随机间隔
-                if not state.stopped:
+                if not stop_event.is_set():
                     gap = random.randint(
                         settings.group_gap_min, settings.group_gap_max
                     )
@@ -251,15 +265,15 @@ async def send_loop(
                         await asyncio.sleep(gap)
 
         # ---- 等待下一轮 ----
-        if not state.stopped:
+        if not stop_event.is_set():
             interval = get_random_interval(settings.min_interval, settings.max_interval)
             logger.info("下一轮将在 %d 秒后开始...", interval)
 
             elapsed = 0
-            while elapsed < interval and not state.stopped:
+            while elapsed < interval and not stop_event.is_set():
                 await asyncio.sleep(1)
                 elapsed += 1
                 if event_bus:
                     await event_bus.emit_countdown(interval - elapsed)
 
-    logger.info("发送循环已退出 (总计发送 %d)", state.total_count)
+    logger.info("发送循环已退出 (总计发送 %d)", runtime.total_count)

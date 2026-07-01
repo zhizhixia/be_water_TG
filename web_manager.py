@@ -151,7 +151,7 @@ _LEGAL_TRANSITIONS: dict[SendState, set[SendState]] = {
     SendState.PAUSING: {SendState.PAUSED, SendState.STOPPING, SendState.STOPPED},
     SendState.PAUSED: {SendState.RUNNING, SendState.STOPPING, SendState.STOPPED},
     SendState.STOPPING: {SendState.STOPPED},
-    SendState.STOPPED: {SendState.IDLE},
+    SendState.STOPPED: {SendState.IDLE, SendState.STARTING},
 }
 
 
@@ -226,13 +226,10 @@ class SendLoopManager:
         message_manager: MessageManager,
         ai_sender=None,
     ) -> TransitionResult:
-        """启动发送循环。先转 STARTING 再起后台线程。"""
-        with self._state_lock:
-            if self._state not in (SendState.IDLE, SendState.STOPPED):
-                return TransitionResult(ok=False, reason="发送循环已在运行")
-            self._state = SendState.STARTING
-            self._stop_event.clear()
-
+        """启动发送循环。通过 transition 单一入口转 STARTING 再起后台线程。"""
+        result = self.transition(SendState.STARTING)
+        if not result.ok:
+            return result
         self._thread = threading.Thread(
             target=self._run_loop,
             args=(sender, settings, message_manager, ai_sender),
@@ -255,12 +252,15 @@ class SendLoopManager:
 
         async def _start():
             await sender.start(code_callback=self._event_bus.wait_for_code)
-            self.transition(SendState.RUNNING)
+            run_result = self.transition(SendState.RUNNING)
+            if not run_result.ok:
+                logger.warning("启动中途状态已变，中止 send_loop: %s", run_result.reason)
+                return
             await self._event_bus.emit_status("running")
             await send_loop(
                 sender=sender,
                 settings=settings,
-                manager=self,  # send_loop 通过 manager 读写状态（任务 6 接通）
+                manager=self,
                 message_manager=message_manager,
                 event_bus=self._event_bus,
                 ai_sender=ai_sender,
@@ -283,6 +283,7 @@ class SendLoopManager:
                 pass
             loop.close()
             self._loop = None
+            self._thread = None
 
     def pause(self) -> TransitionResult:
         return self.transition(SendState.PAUSING)
