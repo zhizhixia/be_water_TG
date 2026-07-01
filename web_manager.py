@@ -4,7 +4,9 @@ import asyncio
 import logging
 import queue
 import threading
+from collections import deque
 from concurrent.futures import Future
+from threading import Lock
 
 from src.config import Settings
 from src.sender import TelegramSender
@@ -15,32 +17,77 @@ logger = logging.getLogger(__name__)
 
 
 class EventBus:
-    """发送循环和 SSE 端点之间的事件桥梁。
+    """发送循环与 SSE 端点之间的事件桥梁。
 
-    运行在后台 asyncio 线程中，通过线程安全的 queue.Queue
-    将事件传递给 Flask 的 SSE 端点。
+    每个订阅者拥有独立的队列，事件广播至所有订阅者；
+    同时维护一个环形缓冲保存历史事件，新订阅者可按 seq 回放。
     """
 
+    # 历史事件环形缓冲容量（覆盖典型刷新场景下的日志量）
+    HISTORY_CAPACITY = 500
+    # 每个订阅者队列容量
+    SUBSCRIBER_QUEUE_SIZE = 500
+
     def __init__(self) -> None:
-        self._queue: queue.Queue[dict | None] = queue.Queue(maxsize=500)
+        self._lock = Lock()
+        self._seq = 0
+        self._history: deque[tuple[int, dict]] = deque(maxlen=self.HISTORY_CAPACITY)
+        self._subscribers: list[queue.Queue] = []
         self._code_future: Future | None = None
-        self._state = "idle"
 
     async def emit_log(self, level: str, message: str) -> None:
-        self._put_safe({"type": "log", "data": {"level": level, "message": message}})
+        self._publish({"type": "log", "data": {"level": level, "message": message}})
 
     async def emit_counter(self, total: int, per_group: dict[str, int]) -> None:
-        self._put_safe({"type": "counter", "data": {"total": total, "per_group": per_group}})
+        self._publish({"type": "counter", "data": {"total": total, "per_group": per_group}})
 
     async def emit_countdown(self, seconds: int) -> None:
-        self._put_safe({"type": "countdown", "data": {"seconds": seconds}})
+        self._publish({"type": "countdown", "data": {"seconds": seconds}})
 
     async def emit_status(self, state: str) -> None:
-        self._state = state
-        self._put_safe({"type": "status", "data": {"state": state}})
+        self._publish({"type": "status", "data": {"state": state}})
 
     async def emit_code_required(self) -> None:
-        self._put_safe({"type": "code_required", "data": {}})
+        self._publish({"type": "code_required", "data": {}})
+
+    def _publish(self, event: dict) -> None:
+        """发布事件：分配递增 seq、入历史、广播至所有订阅者队列。"""
+        with self._lock:
+            self._seq += 1
+            seq = self._seq
+            self._history.append((seq, event))
+            for q in self._subscribers:
+                try:
+                    q.put_nowait((seq, event))
+                except queue.Full:
+                    # 订阅者消费过慢则丢弃该事件，保证广播不阻塞
+                    pass
+
+    def subscribe(self, last_seq: int = 0) -> queue.Queue:
+        """订阅事件流。last_seq 之前的历史不再回放。
+
+        Args:
+            last_seq: 订阅者已处理的最后 seq，仅回放 seq>last_seq 的事件。
+
+        Returns:
+            独立队列，从中读取 (seq, event) 元组。
+        """
+        q: queue.Queue = queue.Queue(maxsize=self.SUBSCRIBER_QUEUE_SIZE)
+        with self._lock:
+            for seq, event in self._history:
+                if seq > last_seq:
+                    try:
+                        q.put_nowait((seq, event))
+                    except queue.Full:
+                        break
+            self._subscribers.append(q)
+        return q
+
+    def unsubscribe(self, q: queue.Queue) -> None:
+        """取消订阅，移除队列引用。"""
+        with self._lock:
+            if q in self._subscribers:
+                self._subscribers.remove(q)
 
     async def wait_for_code(self) -> str:
         loop = asyncio.get_running_loop()
@@ -51,28 +98,20 @@ class EventBus:
         self._code_future = None
         return code
 
-    def submit_code(self, code: str) -> None:
+    def submit_code(self, code: str) -> bool:
+        """提交验证码。返回是否成功设置（无 future 或已完成时返回 False）。"""
         if self._code_future and not self._code_future.done():
             self._code_future.set_result(code)
-
-    def get_event(self, timeout: float = 30) -> dict | None:
-        try:
-            return self._queue.get(timeout=timeout)
-        except queue.Empty:
-            return None
+            return True
+        return False
 
     def get_current_state(self) -> str:
-        return self._state
-
-    def _put_safe(self, event: dict) -> None:
-        try:
-            self._queue.put(event, timeout=1)
-        except queue.Full:
-            try:
-                self._queue.get_nowait()
-                self._queue.put(event, timeout=1)
-            except queue.Full:
-                pass
+        """从历史中取最近一次 status 事件，无则返回 idle。"""
+        with self._lock:
+            for seq, event in reversed(self._history):
+                if event.get("type") == "status":
+                    return event["data"]["state"]
+        return "idle"
 
 
 class LogQueueHandler(logging.Handler):
@@ -84,15 +123,15 @@ class LogQueueHandler(logging.Handler):
             datefmt="%H:%M:%S",
         ))
 
-    def emit(self, record: logging.LogRecord) -> None:
+def emit(self, record: logging.LogRecord) -> None:
         try:
             level = "error" if record.levelno >= logging.ERROR else "warning" if record.levelno >= logging.WARNING else "info"
             msg = self.format(record)
-            self._event_bus._put_safe({
+            self._event_bus._publish({
                 "type": "log", "data": {"level": level, "message": msg},
             })
         except Exception:
-            pass
+            logger.exception("LogQueueHandler 发布事件失败")
 
 
 class SendLoopManager:
