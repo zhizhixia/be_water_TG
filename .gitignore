@@ -10,6 +10,13 @@ __pycache__/
 
 # Internal tooling
 .sisyphus/
+.omo/
+logs/
+
+# Auto-copied superpowers skills (repo-local skills like grill-me/ and openspec-*/ are tracked)
+.opencode/skills/*/
+!.opencode/skills/grill-me/
+!.opencode/skills/openspec-*/
 
 # IDE
 .vscode/
