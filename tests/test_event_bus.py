@@ -80,3 +80,24 @@ def test_unsubscribe_on_close() -> None:
     asyncio.run(bus.emit_log("info", "after"))
     # 取消订阅后不应再收到事件
     assert q.empty()
+
+
+def test_log_queue_handler_routes_to_subscribers() -> None:
+    """LogQueueHandler 绑定后，logging.info 发出的日志经 _publish 路由到订阅者队列。"""
+    import logging
+    from web_manager import EventBus, LogQueueHandler
+
+    bus = EventBus()
+    q = bus.subscribe()
+
+    # 创建一个独立 logger，绑定 LogQueueHandler，避免污染全局 root logger
+    test_logger = logging.getLogger("test_lqh_route")
+    test_logger.handlers.clear()
+    test_logger.addHandler(LogQueueHandler(bus))
+    test_logger.setLevel(logging.INFO)
+
+    test_logger.info("via handler")
+
+    seq, ev = q.get(timeout=1)
+    assert ev["type"] == "log"
+    assert "via handler" in ev["data"]["message"]

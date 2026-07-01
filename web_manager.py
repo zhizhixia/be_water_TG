@@ -123,7 +123,7 @@ class LogQueueHandler(logging.Handler):
             datefmt="%H:%M:%S",
         ))
 
-def emit(self, record: logging.LogRecord) -> None:
+    def emit(self, record: logging.LogRecord) -> None:
         try:
             level = "error" if record.levelno >= logging.ERROR else "warning" if record.levelno >= logging.WARNING else "info"
             msg = self.format(record)
