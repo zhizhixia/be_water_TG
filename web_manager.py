@@ -6,6 +6,7 @@ import queue
 import threading
 from collections import deque
 from concurrent.futures import Future
+from dataclasses import dataclass
 from threading import Lock
 
 from src.config import Settings
@@ -134,24 +135,89 @@ class LogQueueHandler(logging.Handler):
             logger.exception("LogQueueHandler 发布事件失败")
 
 
+@dataclass
+class TransitionResult:
+    """状态转移结果，便于调用方区分成功/失败并给出原因。"""
+    ok: bool
+    reason: str = ""
+
+
+# SendState 合法转移白名单：key=(当前状态), value=set(可转到的目标状态)
+_LEGAL_TRANSITIONS: dict[SendState, set[SendState]] = {
+    SendState.IDLE: {SendState.STARTING},
+    SendState.STARTING: {SendState.RUNNING, SendState.WAITING_CODE, SendState.STOPPING, SendState.STOPPED},
+    SendState.WAITING_CODE: {SendState.RUNNING, SendState.STOPPING, SendState.STOPPED},
+    SendState.RUNNING: {SendState.PAUSING, SendState.STOPPING, SendState.STOPPED},
+    SendState.PAUSING: {SendState.PAUSED, SendState.STOPPING, SendState.STOPPED},
+    SendState.PAUSED: {SendState.RUNNING, SendState.STOPPING, SendState.STOPPED},
+    SendState.STOPPING: {SendState.STOPPED},
+    SendState.STOPPED: {SendState.IDLE},
+}
+
+
 class SendLoopManager:
+    """发送循环生命周期管理者：状态机 + 锁 + 后台线程协调。
+
+    所有状态变更必须经 transition()，内部用 RLock 串行化，
+    保证 Flask 多请求并发下状态一致。
+    """
+
     def __init__(self) -> None:
+        self._state_lock = threading.RLock()
+        self._state = SendState.IDLE
+        self._stop_event = threading.Event()
         self._event_bus = EventBus()
-        self._state = SendState()
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._running = False
+
+    @property
+    def state(self) -> SendState:
+        with self._state_lock:
+            return self._state
 
     @property
     def event_bus(self) -> EventBus:
         return self._event_bus
 
     @property
-    def send_state(self) -> SendState:
-        return self._state
+    def stop_event(self) -> threading.Event:
+        return self._stop_event
+
+    def transition(self, target: SendState) -> TransitionResult:
+        """尝试状态转移。非法转移返回失败，状态不变。
+
+        Args:
+            target: 目标状态。
+
+        Returns:
+            TransitionResult：ok=True 表示转移成功。
+        """
+        with self._state_lock:
+            current = self._state
+            legal = _LEGAL_TRANSITIONS.get(current, set())
+            if target not in legal:
+                # 自环（target == current）也按非法处理，保证并发重复
+                # 调用 transition(STARTING) 只成功一次（test_concurrent_start_no_two_loops）。
+                # 如需对 STOPPING/PAUSED 等做幂等容忍，可后续在白名单显式加入自环。
+                return TransitionResult(
+                    ok=False,
+                    reason=f"Illegal transition: {current.value} -> {target.value}",
+                )
+            self._state = target
+            # 同步副作用：进入 STOPPED/IDLE 时复位 stop_event
+            if target in (SendState.IDLE, SendState.STOPPED):
+                self._stop_event.clear()
+            elif target == SendState.STOPPING:
+                self._stop_event.set()
+            return TransitionResult(ok=True)
 
     def is_running(self) -> bool:
-        return self._running
+        """是否处于活跃发送状态（RUNNING/PAUSING/PAUSED/STARTING/WAITING_CODE）。"""
+        with self._state_lock:
+            return self._state in {
+                SendState.RUNNING, SendState.PAUSING, SendState.PAUSED,
+                SendState.STARTING, SendState.WAITING_CODE,
+            }
 
     def start(
         self,
@@ -159,16 +225,13 @@ class SendLoopManager:
         settings: Settings,
         message_manager: MessageManager,
         ai_sender=None,
-    ) -> None:
-        if self._running:
-            logger.warning("发送循环已在运行")
-            return
-
-        self._state.stopped = False
-        self._state.paused = False
-        self._state.total_count = 0
-        self._state.per_group_counts.clear()
-        self._running = True
+    ) -> TransitionResult:
+        """启动发送循环。先转 STARTING 再起后台线程。"""
+        with self._state_lock:
+            if self._state not in (SendState.IDLE, SendState.STOPPED):
+                return TransitionResult(ok=False, reason="发送循环已在运行")
+            self._state = SendState.STARTING
+            self._stop_event.clear()
 
         self._thread = threading.Thread(
             target=self._run_loop,
@@ -177,6 +240,7 @@ class SendLoopManager:
         )
         self._thread.start()
         logger.info("发送循环已启动")
+        return TransitionResult(ok=True)
 
     def _run_loop(
         self,
@@ -191,11 +255,12 @@ class SendLoopManager:
 
         async def _start():
             await sender.start(code_callback=self._event_bus.wait_for_code)
+            self.transition(SendState.RUNNING)
             await self._event_bus.emit_status("running")
             await send_loop(
                 sender=sender,
                 settings=settings,
-                state=self._state,
+                manager=self,  # send_loop 通过 manager 读写状态（任务 6 接通）
                 message_manager=message_manager,
                 event_bus=self._event_bus,
                 ai_sender=ai_sender,
@@ -206,7 +271,12 @@ class SendLoopManager:
         except Exception as ex:
             logger.exception("发送循环异常退出: %s", ex)
         finally:
-            self._running = False
+            # 确保 disconnect 被调用恰好一次（资源泄漏根因修复）
+            try:
+                loop.run_until_complete(sender.disconnect())
+            except Exception:
+                logger.exception("disconnect 清理失败")
+            self.transition(SendState.STOPPED)
             try:
                 loop.run_until_complete(self._event_bus.emit_status("idle"))
             except Exception:
@@ -214,17 +284,14 @@ class SendLoopManager:
             loop.close()
             self._loop = None
 
-    def pause(self) -> None:
-        self._state.paused = True
-        logger.info("发送循环暂停中...")
+    def pause(self) -> TransitionResult:
+        return self.transition(SendState.PAUSING)
 
-    def resume(self) -> None:
-        self._state.paused = False
-        logger.info("发送循环已恢复")
+    def resume(self) -> TransitionResult:
+        return self.transition(SendState.RUNNING)
 
-    def stop(self) -> None:
-        self._state.stopped = True
-        logger.info("发送循环停止中...")
+    def stop(self) -> TransitionResult:
+        return self.transition(SendState.STOPPING)
 
-    def submit_code(self, code: str) -> None:
-        self._event_bus.submit_code(code)
+    def submit_code(self, code: str) -> bool:
+        return self._event_bus.submit_code(code)

@@ -6,6 +6,7 @@ import random
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, time
+from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from telethon.errors import FloodWaitError, RPCError
@@ -27,18 +28,20 @@ RETRY_FAIL_WAIT = 300
 MAX_FLOOD_RETRIES = 5
 
 
-@dataclass
-class SendState:
-    """发送循环的状态机。
+class SendState(Enum):
+    """发送循环状态机枚举。
 
-    由外部控制器读写，send_loop 内部只读 stopped/paused 并写入计数器。
+    状态转移白名单见 web_manager.SendLoopManager.transition。
     """
 
-    stopped: bool = False
-    paused: bool = False
-    total_count: int = 0
-    per_group_counts: dict[str, int] = field(default_factory=dict)
-    on_paused_callback: Callable[..., Any] | None = field(default=None)
+    IDLE = "idle"
+    STARTING = "starting"
+    RUNNING = "running"
+    PAUSING = "pausing"
+    PAUSED = "paused"
+    STOPPING = "stopping"
+    STOPPED = "stopped"
+    WAITING_CODE = "waiting_code"
 
 
 async def send_loop(
