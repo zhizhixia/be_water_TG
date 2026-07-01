@@ -133,6 +133,9 @@ class TelegramSender:
     async def typing_indicator(self, entity: str) -> None:
         """向指定实体显示"正在输入..."状态，模拟真人打字延迟。
 
+        异常时优雅降级：typing 状态是反检测增强的辅助功能，
+        失败不应阻止消息发送。
+
         Args:
             entity: 目标实体（群组 username 或 ID）。
         """
@@ -141,7 +144,10 @@ class TelegramSender:
         from telethon.tl.functions.messages import SetTypingRequest
         from telethon.tl.types import SendMessageTypingAction
 
-        await self._client(SetTypingRequest(
-            peer=entity,
-            action=SendMessageTypingAction(),
-        ))
+        try:
+            await self._client(SetTypingRequest(
+                peer=entity,
+                action=SendMessageTypingAction(),
+            ))
+        except Exception as e:
+            logger.warning("设置 typing 状态失败 [%s]: %s", entity, e)
