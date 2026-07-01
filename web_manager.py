@@ -12,7 +12,7 @@ from threading import Lock
 from src.config import Settings
 from src.sender import TelegramSender
 from ui.message_manager import MessageManager
-from ui.send_loop import SendState, send_loop
+from ui.send_loop import SendRuntime, SendState, send_loop
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +167,7 @@ class SendLoopManager:
         self._state = SendState.IDLE
         self._stop_event = threading.Event()
         self._event_bus = EventBus()
+        self._runtime = SendRuntime()
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
 
@@ -210,6 +211,27 @@ class SendLoopManager:
             elif target == SendState.STOPPING:
                 self._stop_event.set()
             return TransitionResult(ok=True)
+
+    def increment_count(self, group: str) -> tuple[int, int]:
+        """线程安全自增计数。
+
+        Args:
+            group: 目标群组。
+
+        Returns:
+            (new_total, new_per_group) 元组。
+        """
+        with self._state_lock:
+            self._runtime.total_count += 1
+            self._runtime.per_group_counts[group] = (
+                self._runtime.per_group_counts.get(group, 0) + 1
+            )
+            return self._runtime.total_count, self._runtime.per_group_counts[group]
+
+    def runtime_counts_snapshot(self) -> tuple[int, dict[str, int]]:
+        """线程安全快照：返回 (total, per_group_dict_copy)。"""
+        with self._state_lock:
+            return self._runtime.total_count, dict(self._runtime.per_group_counts)
 
     def is_running(self) -> bool:
         """是否处于活跃发送状态（RUNNING/PAUSING/PAUSED/STARTING/WAITING_CODE）。"""

@@ -197,17 +197,15 @@ async def send_loop(
                 for attempt in range(MAX_RETRIES):
                     try:
                         await sender.send_message(message, target_group=group)
-                        runtime.per_group_counts[group] += 1
-                        runtime.total_count += 1
+                        new_total, new_per = manager.increment_count(group)
                         logger.info(
                             "[%s] 已发送 (本组: %d, 总计: %d)",
-                            group,
-                            runtime.per_group_counts[group],
-                            runtime.total_count,
+                            group, new_per, new_total,
                         )
                         sent = True
                         if event_bus:
-                            await event_bus.emit_counter(runtime.total_count, runtime.per_group_counts)
+                            snap_total, snap_per = manager.runtime_counts_snapshot()
+                            await event_bus.emit_counter(snap_total, snap_per)
                         break
                     except FloodWaitError as e:
                         flood_retries += 1
@@ -221,7 +219,14 @@ async def send_loop(
                             "FloodWait %ds (第 %d/%d 次)，等待中...",
                             e.seconds, flood_retries, MAX_FLOOD_RETRIES,
                         )
-                        await asyncio.sleep(e.seconds)
+                        # 可中断等待：每 0.5s 探测 stop_event，置位则立即跳出
+                        remaining = e.seconds
+                        while remaining > 0 and not stop_event.is_set():
+                            await asyncio.sleep(min(0.5, remaining))
+                            remaining -= 0.5
+                        if stop_event.is_set():
+                            logger.info("FloodWait 等待期间收到停止信号，退出")
+                            break
                     except (ConnectionError, OSError) as e:
                         if attempt < MAX_RETRIES - 1:
                             delay = RETRY_DELAYS[attempt]
