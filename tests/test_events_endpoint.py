@@ -22,7 +22,10 @@ def _reset_event_bus():
 
 
 def _read_sse_chunks(resp, max_chunks: int = 5) -> list[bytes]:
-    """从 SSE streaming response 读取最多 max_chunks 个 chunk，然后断开连接。"""
+    """从 SSE streaming response 读取最多 max_chunks 个 chunk，然后断开连接。
+
+    断开后断言订阅者已从 EventBus._subscribers 中移除（验证 finally: unsubscribe(q) 生效）。
+    """
     gen = resp.response  # generate() 生成器，yield 返回 str
     chunks: list[bytes] = []
     for _ in range(max_chunks):
@@ -33,7 +36,13 @@ def _read_sse_chunks(resp, max_chunks: int = 5) -> list[bytes]:
         if isinstance(val, str):
             val = val.encode("utf-8")
         chunks.append(val)
+    # 进入 generate() 后已 subscribe，此时订阅者数应 >=1
+    subscriber_count_active = len(manager.event_bus._subscribers)
     gen.close()  # 触发 GeneratorExit → generate() 执行 finally: unsubscribe(q)
+    # 关键：gen.close 后 finally 块应已 unsubscribe，订阅者数应少于活跃时
+    assert len(manager.event_bus._subscribers) < subscriber_count_active, (
+        "SSE generator close 后未触发 unsubscribe，存在订阅者泄漏"
+    )
     return chunks
 
 

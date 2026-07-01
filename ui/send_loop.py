@@ -72,9 +72,8 @@ async def send_loop(
     停止信号由 manager.stop_event 提供，可在 FloodWait 等待期间被中断。
     """
     stop_event = manager.stop_event
+    # 仅本函数局部使用的暂停/回调状态：实际计数走 manager.increment_count
     runtime = SendRuntime()
-    # 兼容旧变量名引用，便于最小改动函数体内部
-    state = runtime
 
     # 初始化每群组计数器
     for group in settings.target_groups:
@@ -281,4 +280,6 @@ async def send_loop(
                 if event_bus:
                     await event_bus.emit_countdown(interval - elapsed)
 
-    logger.info("发送循环已退出 (总计发送 %d)", runtime.total_count)
+    # 退出日志读 manager 真实计数快照（任务 8 后计数走 manager.increment_count）
+    total, _ = manager.runtime_counts_snapshot()
+    logger.info("发送循环已退出 (总计发送 %d)", total)

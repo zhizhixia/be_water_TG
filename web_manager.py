@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import queue
+import sys
 import threading
 from collections import deque
 from concurrent.futures import Future
@@ -142,8 +143,10 @@ class LogQueueHandler(logging.Handler):
             self._event_bus._publish({
                 "type": "log", "data": {"level": level, "message": msg},
             })
-        except Exception:
-            logger.exception("LogQueueHandler 发布事件失败")
+        except Exception as e:
+            # 注意：不走 logger.exception/print 经 logging 路由——LogQueueHandler 已挂载到
+            # root logger，再次 print 触发的 emit 会无限递归。直接写 stderr 保证安全。
+            print(f"LogQueueHandler 发布事件失败: {e}", file=sys.stderr)
 
 
 @dataclass

@@ -26,6 +26,8 @@ def test_stop_event_interrupts_floodwait(asyncio_loop, fake_sender, make_setting
     mgr = MagicMock()
     mgr.stop_event = threading.Event()
     mgr.transition = MagicMock(return_value=MagicMock(ok=True))
+    mgr.increment_count = MagicMock(return_value=(0, 0))
+    mgr.runtime_counts_snapshot = MagicMock(return_value=(0, {}))
 
     async def run():
         # 让 message_manager.get_message 返回非空消息，避免直接 continue

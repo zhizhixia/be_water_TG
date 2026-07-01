@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import queue
 from pathlib import Path
 
 from flask import Flask, Response, jsonify, render_template, request
@@ -226,8 +227,8 @@ def api_events():
             while True:
                 try:
                     seq, data = q.get(timeout=30)
-                except Exception:
-                    # queue.Empty 等：发心跳保持连接
+                except queue.Empty:
+                    # 队列空超时：发心跳保持连接
                     yield ": heartbeat\n\n"
                     continue
                 yield f"id: {seq}\ndata: {json.dumps(data)}\n\n"
