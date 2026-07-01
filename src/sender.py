@@ -129,3 +129,19 @@ class TelegramSender:
         if self._client:
             await self._client.disconnect()
             logger.info("已断开 Telegram 连接")
+
+    async def typing_indicator(self, entity: str) -> None:
+        """向指定实体显示"正在输入..."状态，模拟真人打字延迟。
+
+        Args:
+            entity: 目标实体（群组 username 或 ID）。
+        """
+        if self._client is None or not self._client.is_connected():
+            return
+        from telethon.tl.functions.messages import SetTypingRequest
+        from telethon.tl.types import SendMessageTypingAction
+
+        await self._client(SetTypingRequest(
+            peer=entity,
+            action=SendMessageTypingAction(),
+        ))
