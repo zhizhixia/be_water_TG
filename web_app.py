@@ -4,14 +4,13 @@ import json
 import logging
 import os
 from pathlib import Path
-from threading import Lock
 
 from flask import Flask, Response, jsonify, render_template, request
 
 from src.ai_client import AIClient
 from src.ai_sender import AISender
 from src.config import Settings, load_settings, save_settings
-from src.group_parser import parse_group_links
+from src.group_parser import parse_group_links, validate_group_links
 from src.sender import TelegramSender
 from ui.message_manager import MessageManager
 from web_manager import LogQueueHandler, SendLoopManager
@@ -22,7 +21,6 @@ app = Flask(__name__)
 
 # 全局发送管理器
 manager = SendLoopManager()
-_manager_lock = Lock()
 
 
 # ===== 页面路由 =====
@@ -129,63 +127,72 @@ def api_config_save():
 
 @app.route("/api/start", methods=["POST"])
 def api_start():
-    """启动发送循环"""
-    global manager
-    with _manager_lock:
-        if manager.is_running():
-            return jsonify({"success": False, "error": "发送循环已在运行"}), 409
+    """启动发送循环。先校验群组链接，再经 manager.start 进入 STARTING。"""
+    try:
+        settings = load_settings()
+    except ValueError as ex:
+        # load_settings 在 target_groups 为空时抛 ValueError，视为校验失败 → 422
+        return jsonify({"success": False, "detail": str(ex)}), 422
+    except Exception as ex:
+        return jsonify({"success": False, "error": f"加载配置失败: {ex}"}), 400
 
-        try:
-            settings = load_settings()
-        except Exception as ex:
-            return jsonify({"success": False, "error": f"加载配置失败: {ex}"}), 400
+    # 前置校验：群组链接无效则直接返回 422，避免启动后才失败
+    try:
+        validate_group_links(settings.target_groups)
+    except ValueError as ex:
+        return jsonify({"success": False, "detail": str(ex)}), 422
 
-        # 构建 MessageManager
-        group_file_map = {}
-        if settings.message_files:
-            group_file_map = settings.message_files
-        else:
-            # 如果没有消息文件映射，自动给每个群组分配默认路径
-            for g in settings.target_groups:
-                group_file_map[g] = f"messages_{g.split('/')[-1]}.txt"
+    # 构建 MessageManager
+    group_file_map = {}
+    if settings.message_files:
+        group_file_map = settings.message_files
+    else:
+        for g in settings.target_groups:
+            group_file_map[g] = f"messages_{g.split('/')[-1]}.txt"
 
-        try:
-            message_manager = MessageManager(group_file_map)
-        except Exception as ex:
-            return jsonify({"success": False, "error": f"加载消息文件失败: {ex}"}), 400
+    try:
+        message_manager = MessageManager(group_file_map)
+    except Exception as ex:
+        return jsonify({"success": False, "error": f"加载消息文件失败: {ex}"}), 400
 
-        # 创建 TelegramSender
-        sender = TelegramSender(settings)
+    sender = TelegramSender(settings)
 
-        # 创建 AI sender（如果启用）
-        ai_sender = None
-        if settings.ai_enabled and settings.ai_api_key:
-            ai_client = AIClient(
-                api_key=settings.ai_api_key,
-                base_url=settings.ai_base_url,
-                model=settings.ai_model,
-            )
-            ai_sender = AISender(sender, ai_client)
+    ai_sender = None
+    if settings.ai_enabled and settings.ai_api_key:
+        ai_client = AIClient(
+            api_key=settings.ai_api_key,
+            base_url=settings.ai_base_url,
+            model=settings.ai_model,
+        )
+        ai_sender = AISender(sender, ai_client)
 
-        manager.start(sender, settings, message_manager, ai_sender)
-        return jsonify({"success": True})
+    result = manager.start(sender, settings, message_manager, ai_sender)
+    if not result.ok:
+        return jsonify({"success": False, "error": result.reason}), 409
+    return jsonify({"success": True})
 
 
 @app.route("/api/pause", methods=["POST"])
 def api_pause():
-    manager.pause()
+    result = manager.pause()
+    if not result.ok:
+        return jsonify({"success": False, "error": result.reason}), 409
     return jsonify({"success": True})
 
 
 @app.route("/api/resume", methods=["POST"])
 def api_resume():
-    manager.resume()
+    result = manager.resume()
+    if not result.ok:
+        return jsonify({"success": False, "error": result.reason}), 409
     return jsonify({"success": True})
 
 
 @app.route("/api/stop", methods=["POST"])
 def api_stop():
-    manager.stop()
+    result = manager.stop()
+    if not result.ok:
+        return jsonify({"success": False, "error": result.reason}), 409
     return jsonify({"success": True})
 
 
@@ -240,11 +247,12 @@ def api_events():
 
 @app.route("/api/code", methods=["POST"])
 def api_code():
-    """提交 Telegram 验证码"""
+    """提交 Telegram 验证码。submit_code 在无 future 或已超时时返回 False → 409。"""
     data = request.get_json()
     if not data or not data.get("code"):
         return jsonify({"success": False, "error": "验证码不能为空"}), 400
-    manager.submit_code(str(data["code"]).strip())
+    if not manager.submit_code(str(data["code"]).strip()):
+        return jsonify({"success": False, "error": "当前无验证码请求或已超时"}), 409
     return jsonify({"success": True})
 
 
