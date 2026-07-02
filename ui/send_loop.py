@@ -268,6 +268,20 @@ async def send_loop(
                     if gap > 0:
                         await asyncio.sleep(gap)
 
+        # ---- 外部暂停检查（按钮暂停） ----
+        if manager.state == SendState.PAUSING:
+            manager.transition(SendState.PAUSED)
+            if event_bus:
+                await event_bus.emit_status("paused")
+            logger.info("用户暂停，完成当前轮后已暂停")
+            while manager.state == SendState.PAUSED and not stop_event.is_set():
+                await asyncio.sleep(1)
+            if stop_event.is_set():
+                break
+            if event_bus:
+                await event_bus.emit_status("running")
+            logger.info("已恢复发送")
+
         # ---- 等待下一轮 ----
         if not stop_event.is_set():
             interval = get_random_interval(settings.min_interval, settings.max_interval)

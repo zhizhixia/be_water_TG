@@ -34,6 +34,9 @@ class Settings:
     ai_model: str = "deepseek-chat"
     ai_prompt: str = ""
     ai_context_count: int = 5
+    ai_temperature: float = 0.7
+    ai_max_tokens: int = 500
+    ai_timeout: int = 30
 
     # 定时运行窗口
     schedule_enabled: bool = False
@@ -184,6 +187,9 @@ def load_settings() -> Settings:
     ai_model = os.getenv("AI_MODEL", "deepseek-chat")
     ai_prompt = os.getenv("AI_PROMPT", "")
     ai_context_count = int(os.getenv("AI_CONTEXT_COUNT", "5"))
+    ai_temperature = float(os.getenv("AI_TEMPERATURE", "0.7"))
+    ai_max_tokens = int(os.getenv("AI_MAX_TOKENS", "500"))
+    ai_timeout = int(os.getenv("AI_TIMEOUT", "30"))
 
     # 定时运行窗口
     schedule_enabled = os.getenv("SCHEDULE_ENABLED", "").lower() in ("true", "1", "yes")
@@ -223,6 +229,9 @@ def load_settings() -> Settings:
         ai_model=ai_model,
         ai_prompt=ai_prompt,
         ai_context_count=ai_context_count,
+        ai_temperature=ai_temperature,
+        ai_max_tokens=ai_max_tokens,
+        ai_timeout=ai_timeout,
         schedule_enabled=schedule_enabled,
         schedule_morning_start=schedule_morning_start,
         schedule_morning_end=schedule_morning_end,
@@ -275,6 +284,12 @@ def save_settings(settings: Settings, path: str | None = None) -> None:
     if settings.ai_prompt:
         new_values["AI_PROMPT"] = settings.ai_prompt
     new_values["AI_CONTEXT_COUNT"] = str(settings.ai_context_count)
+    if settings.ai_temperature != 0.7:
+        new_values["AI_TEMPERATURE"] = str(settings.ai_temperature)
+    if settings.ai_max_tokens != 500:
+        new_values["AI_MAX_TOKENS"] = str(settings.ai_max_tokens)
+    if settings.ai_timeout != 30:
+        new_values["AI_TIMEOUT"] = str(settings.ai_timeout)
 
     if settings.schedule_enabled:
         new_values["SCHEDULE_ENABLED"] = "true"

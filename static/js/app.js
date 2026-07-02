@@ -264,6 +264,9 @@ async function loadConfig() {
     document.getElementById('ai_model').value = c.ai_model || 'deepseek-chat';
     document.getElementById('ai_prompt').value = c.ai_prompt || '';
     document.getElementById('ai_context_count').value = c.ai_context_count || 5;
+    document.getElementById('ai_temperature').value = c.ai_temperature != null ? c.ai_temperature : 0.7;
+    document.getElementById('ai_max_tokens').value = c.ai_max_tokens || 500;
+    document.getElementById('ai_timeout').value = c.ai_timeout || 30;
     document.getElementById('ai_enabled').dispatchEvent(new Event('change'));
 
     document.getElementById('schedule_enabled').checked = c.schedule_enabled || false;
@@ -327,6 +330,9 @@ async function saveConfig() {
     ai_model: document.getElementById('ai_model').value.trim() || 'deepseek-chat',
     ai_prompt: document.getElementById('ai_prompt').value.trim(),
     ai_context_count: parseInt(document.getElementById('ai_context_count').value) || 5,
+    ai_temperature: parseFloat(document.getElementById('ai_temperature').value) || 0.7,
+    ai_max_tokens: parseInt(document.getElementById('ai_max_tokens').value) || 500,
+    ai_timeout: parseInt(document.getElementById('ai_timeout').value) || 30,
     schedule_enabled: document.getElementById('schedule_enabled').checked,
     schedule_morning_start: document.getElementById('schedule_morning_start').value.trim(),
     schedule_morning_end: document.getElementById('schedule_morning_end').value.trim(),

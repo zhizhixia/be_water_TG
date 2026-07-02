@@ -107,6 +107,20 @@
         <label for="ai_context_count">上下文消息数</label>
         <input type="number" id="ai_context_count" value="5" min="1" max="20">
       </div>
+      <div class="form-row ai-field" style="display:none">
+        <div class="form-group">
+          <label for="ai_temperature">AI 温度 (0-2)</label>
+          <input type="number" id="ai_temperature" step="0.1" min="0" max="2" value="0.7">
+        </div>
+        <div class="form-group">
+          <label for="ai_max_tokens">最大 Token</label>
+          <input type="number" id="ai_max_tokens" value="500" min="1" max="4096">
+        </div>
+      </div>
+      <div class="form-group ai-field" style="display:none">
+        <label for="ai_timeout">请求超时（秒）</label>
+        <input type="number" id="ai_timeout" value="30" min="5" max="120">
+      </div>
     </div>
   </details>
 

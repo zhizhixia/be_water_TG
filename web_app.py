@@ -57,6 +57,9 @@ def api_config_get():
                 "ai_model": settings.ai_model,
                 "ai_prompt": settings.ai_prompt,
                 "ai_context_count": settings.ai_context_count,
+                "ai_temperature": settings.ai_temperature,
+                "ai_max_tokens": settings.ai_max_tokens,
+                "ai_timeout": settings.ai_timeout,
                 "schedule_enabled": settings.schedule_enabled,
                 "schedule_morning_start": settings.schedule_morning_start,
                 "schedule_morning_end": settings.schedule_morning_end,
@@ -106,6 +109,9 @@ def api_config_save():
             ai_model=data.get("ai_model", "deepseek-chat"),
             ai_prompt=data.get("ai_prompt", ""),
             ai_context_count=int(data.get("ai_context_count", 5)),
+            ai_temperature=float(data.get("ai_temperature", 0.7)),
+            ai_max_tokens=int(data.get("ai_max_tokens", 500)),
+            ai_timeout=int(data.get("ai_timeout", 30)),
             schedule_enabled=bool(data.get("schedule_enabled", False)),
             schedule_morning_start=data.get("schedule_morning_start", "08:00"),
             schedule_morning_end=data.get("schedule_morning_end", "11:00"),
@@ -166,6 +172,9 @@ def api_start():
             api_key=settings.ai_api_key,
             base_url=settings.ai_base_url,
             model=settings.ai_model,
+            temperature=settings.ai_temperature,
+            max_tokens=settings.ai_max_tokens,
+            timeout=settings.ai_timeout,
         )
         ai_sender = AISender(sender, ai_client)
 
