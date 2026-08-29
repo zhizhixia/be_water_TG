@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from collections import deque
@@ -137,6 +138,50 @@ class AISender:
         if len(set(labels)) != 1:
             raise ValueError(f"Unexpected classification response: {reply!r}")
         return labels[0].casefold()
+
+    async def analyze(self, payload: dict[str, object]) -> dict[str, object]:
+        """调用 AI 识别抽奖，并仅返回固定的结构化结果。"""
+        safe_payload = {
+            key: payload[key]
+            for key in ("text", "context", "buttons")
+            if key in payload
+        }
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是抽奖识别器。仅输出一个 JSON 对象，不要 Markdown、代码围栏或额外文本。"
+                    "对象必须且只能包含以下字段："
+                    "is_lottery（布尔值）、confidence（0 到 1 的数字）、summary（字符串）、"
+                    "deadline（字符串或 null）、required_actions（字符串数组）、reason（字符串）。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(safe_payload, ensure_ascii=False),
+            },
+        ]
+        try:
+            reply = await asyncio.to_thread(self._client.chat, messages)
+        except (OSError, TimeoutError):
+            raise
+        except Exception as exc:
+            raise OSError("抽奖 AI 调用失败") from exc
+        try:
+            result = json.loads(reply)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("抽奖 AI 返回的不是有效 JSON") from exc
+        required = {
+            "is_lottery",
+            "confidence",
+            "summary",
+            "deadline",
+            "required_actions",
+            "reason",
+        }
+        if not isinstance(result, dict) or set(result) != required:
+            raise ValueError("抽奖 AI 返回未遵循固定 schema")
+        return result
 
     def commit_sent(self, group: str, text: str) -> None:
         """Commit AI memory after the external send is durably confirmed."""
