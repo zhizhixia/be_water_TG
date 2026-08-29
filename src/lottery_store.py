@@ -175,6 +175,15 @@ class LotteryStore:
         """返回该群是否处于抽奖冻结状态。"""
         with closing(self._connect()) as db: return db.execute("SELECT 1 FROM lottery_group_freeze WHERE peer_id=?", (peer_id,)).fetchone() is not None
 
+    def set_pending_alert(self, lottery_id: int, summary: str) -> bool:
+        """将既有抽奖设为待人工处理，并仅保存调用方提供的安全摘要。"""
+        def operation(db: sqlite3.Connection) -> bool:
+            return db.execute(
+                "UPDATE lottery_entry SET alert_status=?, summary=? WHERE id=?",
+                (AlertStatus.PENDING.value, summary, lottery_id),
+            ).rowcount == 1
+        return self._write(operation)
+
     def open_alert(self, lottery_id: int) -> LotteryEntry | None:
         """原子打开提醒，保留参与状态且仅解冻对应未知结果群。"""
         def operation(db: sqlite3.Connection) -> LotteryEntry | None:
