@@ -44,6 +44,34 @@ def test_health_is_only_available_at_api_health_with_fixed_safe_status() -> None
     server.stop()
 
 
+def test_health_request_does_not_load_settings_dotenv_or_env(monkeypatch) -> None:
+    calls: list[str] = []
+
+    def forbidden(*_args: object, **_kwargs: object) -> None:
+        calls.append("configuration")
+        raise AssertionError("health must not read configuration")
+
+    monkeypatch.setattr("src.config.load_settings", forbidden)
+    monkeypatch.setattr("src.config.load_dotenv", forbidden)
+    monkeypatch.setattr("src.config.os.getenv", forbidden)
+
+    app = Flask(__name__)
+    server = AppServer(
+        app,
+        configuration_status=main._configuration_status,
+        server_factory=lambda _app, **_: FakeWaitressServer(),
+    )
+    server.start()
+
+    assert app.test_client().get("/api/health").get_json() == {
+        "app": APP_NAME,
+        "version": APP_VERSION,
+        "configured": False,
+    }
+    assert calls == []
+    server.stop()
+
+
 def test_server_uses_loopback_and_releases_waitress_server() -> None:
     """宿主仅绑定回环地址，并在停止时关闭 Waitress 服务。"""
     app = Flask(__name__)

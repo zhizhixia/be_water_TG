@@ -22,17 +22,26 @@ class _Lock(Protocol):
 class _WindowsMutex:
     """以 Windows 命名互斥体保存应用进程生命周期。"""
 
-    def __init__(self) -> None:
+    def __init__(self, *, kernel32: object | None = None,
+                 set_last_error: Callable[[int], None] = ctypes.set_last_error,
+                 get_last_error: Callable[[], int] = ctypes.get_last_error) -> None:
         self._handle: int | None = None
+        self._kernel32 = kernel32 or ctypes.WinDLL("kernel32", use_last_error=True)
+        self._set_last_error = set_last_error
+        self._get_last_error = get_last_error
+        self._kernel32.CreateMutexW.restype = ctypes.c_void_p
+        self._kernel32.CreateMutexW.argtypes = [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
+        self._kernel32.CloseHandle.restype = ctypes.c_bool
+        self._kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
 
     def acquire(self) -> bool:
         """创建本会话互斥体；已有持有者时返回 False。"""
-        ctypes.set_last_error(0)
-        handle = ctypes.windll.kernel32.CreateMutexW(None, False, "Local\\BeWaterTG-v1")
+        self._set_last_error(0)
+        handle = self._kernel32.CreateMutexW(None, False, "Local\\BeWaterTG-v1")
         if not handle:
-            raise OSError(ctypes.get_last_error(), "无法创建应用互斥体")
-        if ctypes.get_last_error() == 183:
-            ctypes.windll.kernel32.CloseHandle(handle)
+            raise OSError(self._get_last_error(), "无法创建应用互斥体")
+        if self._get_last_error() == 183:
+            self._kernel32.CloseHandle(handle)
             return False
         self._handle = handle
         return True
@@ -40,7 +49,7 @@ class _WindowsMutex:
     def release(self) -> None:
         """关闭本进程持有的互斥体句柄。"""
         if self._handle is not None:
-            ctypes.windll.kernel32.CloseHandle(self._handle)
+            self._kernel32.CloseHandle(self._handle)
             self._handle = None
 
 

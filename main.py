@@ -8,6 +8,7 @@ from src.app_instance import AppInstance
 from src.app_server import AppServer, AppServerStartupError
 
 logger = logging.getLogger("main")
+_configured = False
 
 
 def setup_root_logger() -> None:
@@ -32,13 +33,17 @@ def setup_root_logger() -> None:
 
 
 def _configuration_status() -> dict[str, bool]:
+    return {"configured": _configured}
+
+
+def _load_configuration_status() -> bool:
     try:
         from src.config import load_settings
 
-        settings = load_settings()
-        return {"configured": True}
+        load_settings()
+        return True
     except Exception:
-        return {"configured": False}
+        return False
 
 
 def run_application(port: int = 5000) -> int:
@@ -51,6 +56,8 @@ def run_application(port: int = 5000) -> int:
         logger.error("应用实例已被占用，无法确认既有本地服务")
         return 1
 
+    global _configured
+    _configured = _load_configuration_status()
     server: AppServer | None = None
     try:
         from web_app import create_app

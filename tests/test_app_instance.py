@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from src.app_instance import APP_NAME, APP_VERSION, AppInstance, is_local_bewater_service
+import ctypes
+
+from src.app_instance import APP_NAME, APP_VERSION, AppInstance, _WindowsMutex, is_local_bewater_service
 
 
 class SharedMutex:
@@ -25,6 +27,81 @@ def test_second_instance_detects_running_local_service() -> None:
     assert not second.acquire()
     assert second.existing_service_is_ours()
     first.release()
+
+
+def test_windows_mutex_second_same_name_acquire_returns_false_and_closes_handle() -> None:
+    class Function:
+        def __init__(self, callback: object) -> None:
+            self._callback = callback
+
+        def __call__(self, *args: object) -> object:
+            return self._callback(*args)
+
+    class Kernel32:
+        def __init__(self) -> None:
+            self.CreateMutexW = Function(self.create_mutex)
+            self.CloseHandle = Function(self.close_handle)
+            self.last_error = 0
+            self.closed: list[int] = []
+
+        def create_mutex(self, _security: object, _owner: bool, name: str) -> int:
+            assert name == "Local\\BeWaterTG-v1"
+            self.last_error = 183
+            return 123
+
+        def close_handle(self, handle: int) -> bool:
+            self.closed.append(handle)
+            return True
+
+    kernel32 = Kernel32()
+    mutex = _WindowsMutex(
+        kernel32=kernel32,
+        set_last_error=lambda value: setattr(kernel32, "last_error", value),
+        get_last_error=lambda: kernel32.last_error,
+    )
+
+    assert not mutex.acquire()
+    assert kernel32.closed == [123]
+
+
+def test_windows_mutex_uses_last_error_aware_kernel32_loader(monkeypatch) -> None:
+    """默认加载器必须将 Win32 last-error 映射到 ctypes 线程槽。"""
+    calls: list[tuple[str, bool]] = []
+
+    class Function:
+        def __call__(self, *_args: object) -> int:
+            return 0
+
+    class Kernel32:
+        CreateMutexW = Function()
+        CloseHandle = Function()
+
+    def load(name: str, *, use_last_error: bool) -> Kernel32:
+        calls.append((name, use_last_error))
+        return Kernel32()
+
+    monkeypatch.setattr(ctypes, "WinDLL", load)
+    _WindowsMutex()
+
+    assert calls == [("kernel32", True)]
+
+
+def test_windows_mutex_configures_pointer_sized_kernel32_abi() -> None:
+    class Function:
+        def __call__(self, *_args: object) -> int:
+            return 0
+
+    class Kernel32:
+        CreateMutexW = Function()
+        CloseHandle = Function()
+
+    kernel32 = Kernel32()
+    _WindowsMutex(kernel32=kernel32)
+
+    assert kernel32.CreateMutexW.restype is ctypes.c_void_p
+    assert kernel32.CreateMutexW.argtypes == [ctypes.c_void_p, ctypes.c_bool, ctypes.c_wchar_p]
+    assert kernel32.CloseHandle.restype is ctypes.c_bool
+    assert kernel32.CloseHandle.argtypes == [ctypes.c_void_p]
 
 
 def test_health_probe_rejects_unexpected_response(monkeypatch) -> None:
