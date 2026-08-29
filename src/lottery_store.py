@@ -79,6 +79,48 @@ class LotteryStore:
             db.execute("UPDATE schema_version SET version=?", (self.SCHEMA_VERSION,))
         self._write(operation)
 
+    def scan_state(self, peer_id: int) -> dict[str, int | str | None]:
+        """读取群扫描游标；未初始化群返回不推进游标的安全状态。"""
+        with closing(self._connect()) as db:
+            row = db.execute(
+                "SELECT peer_id, cursor_message_id, last_attempt_at, last_success_at, last_error "
+                "FROM lottery_scan_state WHERE peer_id=?",
+                (peer_id,),
+            ).fetchone()
+        if row is None:
+            return {
+                "peer_id": peer_id,
+                "cursor_message_id": None,
+                "last_attempt_at": None,
+                "last_success_at": None,
+                "last_error": None,
+            }
+        return dict(row)
+
+    def commit_scan_batch(
+        self, peer_id: int, cursor_message_id: int, messages: list[Any] | None = None
+    ) -> None:
+        """原子提交单群扫描游标，且绝不持久化消息媒体或回调对象。"""
+        _ = messages
+
+        def operation(db: sqlite3.Connection) -> None:
+            db.execute(
+                """
+                INSERT INTO lottery_scan_state(peer_id, cursor_message_id)
+                VALUES (?, ?)
+                ON CONFLICT(peer_id) DO UPDATE SET
+                    cursor_message_id = CASE
+                        WHEN lottery_scan_state.cursor_message_id IS NULL
+                          OR excluded.cursor_message_id > lottery_scan_state.cursor_message_id
+                        THEN excluded.cursor_message_id
+                        ELSE lottery_scan_state.cursor_message_id
+                    END
+                """,
+                (peer_id, cursor_message_id),
+            )
+
+        self._write(operation)
+
     def create_daily_batch(self, local_date: str, peer_ids: list[int]) -> bool:
         """幂等保存当天群快照。"""
         return self._write(lambda db: db.execute("INSERT OR IGNORE INTO daily_batch(local_date,groups_json,status) VALUES (?,?,?)", (local_date, json.dumps(peer_ids), "PENDING")).rowcount == 1)
