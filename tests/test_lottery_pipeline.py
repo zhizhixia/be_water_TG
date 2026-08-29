@@ -102,4 +102,4 @@ def test_lottery_api_open_and_stopped_cleanup(monkeypatch, tmp_path) -> None:
     assert client.get("/api/lotteries").get_json()["total"] == 0
     assert client.post(f"/api/lotteries/{entry}/open").status_code == 200
     manager._state = manager.state.IDLE
-    assert client.post("/api/lotteries/cleanup", json={"before": "2026-08-02"}).get_json()["deleted"]["lottery_entry"] == 1
+    assert client.post("/api/lotteries/cleanup", json={"before": "2026-08-02", "confirm": "确认清理"}).get_json()["deleted"]["lottery_entry"] == 1

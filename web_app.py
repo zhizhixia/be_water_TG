@@ -343,7 +343,7 @@ def api_lottery_cleanup():
         return jsonify({"success": False, "error": "请先停止自动任务后再清理抽奖历史"}), 409
     data = request.get_json(silent=True) or {}
     cutoff = str(data.get("before", "")).strip()
-    if "confirm" in data and data.get("confirm") != "确认清理":
+    if data.get("confirm") != "确认清理":
         return jsonify({"success": False, "error": "请输入“确认清理”进行二次确认"}), 400
     try:
         from datetime import date

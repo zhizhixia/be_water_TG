@@ -65,11 +65,18 @@ def test_open_lottery_closes_alert_unfreezes_unknown_and_returns_safe_link(monke
 
 
 def test_cleanup_requires_stopped_state_and_explicit_chinese_confirmation(monkeypatch, tmp_path) -> None:
-    """清理只允许 IDLE/STOPPED，且缺少中文二次确认绝不改变持久化。"""
+    """清理只允许 IDLE/STOPPED，且缺少或不精确的中文确认绝不调用清理。"""
     path = tmp_path / "state.db"
     _set_env(monkeypatch, path)
     store = LotteryStore(path)
     lottery_id = store.record_entry(1, 2, "old", "2026-08-01", "DETECTED", "旧记录")
+    cleanup_calls: list[str] = []
+
+    def cleanup_before(_store, cutoff: str) -> dict[str, int]:
+        cleanup_calls.append(cutoff)
+        return {"lottery_entry": 1}
+
+    monkeypatch.setattr(LotteryStore, "cleanup_before", cleanup_before)
     manager._state = manager.state.RUNNING
     client = app.test_client()
 
@@ -77,10 +84,44 @@ def test_cleanup_requires_stopped_state_and_explicit_chinese_confirmation(monkey
     assert blocked.status_code == 409
     assert "停止" in blocked.get_json()["error"]
     manager._state = manager.state.IDLE
-    unconfirmed = client.post("/api/lotteries/cleanup", json={"before": "2026-08-02", "confirm": ""})
-    assert unconfirmed.status_code == 400
-    assert "确认" in unconfirmed.get_json()["error"]
+    for payload in (
+        {"before": "2026-08-02"},
+        {"before": "2026-08-02", "confirm": ""},
+        {"before": "2026-08-02", "confirm": " 确认清理"},
+        {"before": "2026-08-02", "confirm": "确认清理 "},
+    ):
+        unconfirmed = client.post("/api/lotteries/cleanup", json=payload)
+        assert unconfirmed.status_code == 400
+        assert "确认" in unconfirmed.get_json()["error"]
+    assert cleanup_calls == []
     assert store.open_alert(lottery_id) is not None
+
+
+def test_cleanup_executes_only_with_exact_confirmation_valid_date_and_safe_state(monkeypatch, tmp_path) -> None:
+    """只有 IDLE/STOPPED、精确确认及 ISO 日期的组合才会执行清理。"""
+    path = tmp_path / "state.db"
+    _set_env(monkeypatch, path)
+    cleanup_calls: list[str] = []
+
+    def cleanup_before(_store, cutoff: str) -> dict[str, int]:
+        cleanup_calls.append(cutoff)
+        return {"lottery_entry": 1}
+
+    monkeypatch.setattr(LotteryStore, "cleanup_before", cleanup_before)
+    client = app.test_client()
+
+    manager._state = manager.state.IDLE
+    idle = client.post("/api/lotteries/cleanup", json={"before": "2026-08-02", "confirm": "确认清理"})
+    assert idle.status_code == 200
+    assert idle.get_json() == {"success": True, "deleted": {"lottery_entry": 1}}
+
+    manager._state = manager.state.STOPPED
+    stopped = client.post("/api/lotteries/cleanup", json={"before": "2026-08-03", "confirm": "确认清理"})
+    assert stopped.status_code == 200
+
+    invalid_date = client.post("/api/lotteries/cleanup", json={"before": "not-a-date", "confirm": "确认清理"})
+    assert invalid_date.status_code == 400
+    assert cleanup_calls == ["2026-08-02", "2026-08-03"]
 
 
 def test_lottery_sse_events_redact_sensitive_fields() -> None:
