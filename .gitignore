@@ -53,6 +53,11 @@ poc_*
 *_output.txt
 be_water_TG/
 
+# PyInstaller build artifacts (reproducible from main.py)
+build/
+dist/
+*.spec
+
 # OS
 .DS_Store
 Thumbs.db
