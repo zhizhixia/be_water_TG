@@ -10,6 +10,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime, time
 from enum import Enum
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 from telethon.errors import ChannelPrivateError, FloodWaitError, RPCError
 
@@ -202,6 +203,8 @@ async def _send_with_retry(
     event_bus: EventBus | None,
 ) -> bool:
     for attempt in range(MAX_RETRIES):
+        if stop_event.is_set():
+            return False
         try:
             await sender.send_message(message, target_group=group)
             return True
@@ -230,7 +233,7 @@ async def _send_with_retry(
     return False
 
 
-async def send_loop(
+async def _send_loop_locked(
     sender: TelegramSender,
     settings: Settings,
     manager: SendLoopManager,
@@ -238,6 +241,8 @@ async def send_loop(
     event_bus: EventBus | None = None,
     ai_sender: AISender | None = None,
     state_store: StateStore | None = None,
+    lottery_scan_clock: Callable[[], float] = monotonic,
+    shanghai_now: Callable[[], datetime] | None = None,
 ) -> None:
     """Observe authorized groups and send only policy-approved candidates."""
     stop_event = manager.stop_event
@@ -247,12 +252,9 @@ async def send_loop(
     safety = SafetyGuard()
     generator = MessageGenerator(ai_sender, message_manager)
 
-    # 先取得单实例锁，再把配置入口解析并迁移为稳定 peer_id；后续状态、观察和
-    # 普通参与均不得再回退到 URL/用户名。
-    instance_lock = InstanceLock(settings.phone, settings.state_db_path)
-    if not instance_lock.acquire():
-        manager.request_emergency_stop()
-        return
+    shanghai_timezone = ZoneInfo("Asia/Shanghai")
+    shanghai_now = shanghai_now or (lambda: datetime.now(shanghai_timezone))
+    clock = type("ShanghaiClock", (), {"now": staticmethod(shanghai_now)})()
     groups = list(settings.target_groups)
     checkin_allowed: set[str] | None = None
     lottery_store: LotteryStore | None = None
@@ -262,7 +264,6 @@ async def send_loop(
             store.migrate_group_identities(identities)
             groups = [str(identity.peer_id) for identity in identities]
             lottery_store = LotteryStore(settings.state_db_path)
-            clock = type("ShanghaiClock", (), {"now": staticmethod(lambda: datetime.now().astimezone())})()
             peers = DailyTaskScheduler(lottery_store, clock).ensure_batch(
                 [identity.peer_id for identity in identities], settings.schedule_enabled, _in_schedule(settings)
             )
@@ -275,7 +276,7 @@ async def send_loop(
                 for peer_id in peers:
                     if stop_event.is_set():
                         break
-                    result = await checkin.attempt(peer_id, str(peer_id))
+                    result = await checkin.attempt(peer_id, str(peer_id), stop_event=stop_event)
                     if result not in {"COMPLETED", "ALREADY_ATTEMPTED"}:
                         checkin_allowed.discard(str(peer_id))
             if event_bus:
@@ -292,8 +293,18 @@ async def send_loop(
         manager.set_persisted_count(state.group, state.sent_count)
 
     if settings.lottery_enabled and lottery_store is not None:
-        lottery_queue = LotteryQueue()
-        executor = LotteryExecutor(sender, lottery_store)
+        lottery_queue = LotteryQueue(
+            wait_min_seconds=settings.lottery_action_gap_min_seconds,
+            wait_max_seconds=settings.lottery_action_gap_max_seconds,
+        )
+        executor = LotteryExecutor(
+            sender,
+            lottery_store,
+            local_date=lambda: shanghai_now().astimezone(shanghai_timezone).date().isoformat(),
+            per_group_limit=settings.lottery_per_group_daily_limit,
+            account_limit=settings.lottery_account_daily_limit,
+        )
+        next_lottery_scan_at: dict[int, float] = {}
 
         async def process_lottery_message(message: Any) -> None:
             if stop_event.is_set() or lottery_store.is_frozen(message.peer_id):
@@ -310,20 +321,36 @@ async def send_loop(
             lottery_plan = plan_lottery(message)
             if lottery_plan.manual_reason:
                 lottery_store.set_entry_status(lottery_id, ParticipationStatus.MANUAL_REQUIRED)
+                lottery_store.set_pending_alert(lottery_id, "manual_required")
                 return
             async def run_plan() -> None:
                 result = await executor.execute(message, lottery_plan.actions, lambda: sender.get_message(message.peer_id, message.message_id), lottery_id, stop_event)
                 if result == "RESULT_UNKNOWN":
                     lottery_store.freeze(message.peer_id, result, lottery_id)
+                    lottery_store.set_pending_alert(lottery_id, "result_unknown")
+                elif result in {"SUPERSEDED", "PERSISTENCE_FAILED", "MANUAL_REQUIRED"}:
+                    lottery_store.set_entry_status(lottery_id, ParticipationStatus.MANUAL_REQUIRED)
+                    lottery_store.set_pending_alert(lottery_id, "manual_required")
             await lottery_queue.put(run_plan)
 
-        for peer in (int(group) for group in groups):
-            if stop_event.is_set():
-                break
+        async def scan_lottery_peer(peer: int) -> None:
+            """按每群独立单调时钟扫描，失败也等待完整配置间隔。"""
+            if stop_event.is_set() or manager.state in (SendState.PAUSING, SendState.PAUSED):
+                return
+            now = lottery_scan_clock()
+            if now < next_lottery_scan_at.get(peer, float("-inf")):
+                return
+            next_lottery_scan_at[peer] = now + settings.lottery_scan_interval_minutes * 60
             try:
-                pinned, _complete = await sender.get_current_pinned_messages(peer)
-                for message in current_day_pinned(pinned, clock.now().astimezone().date().isoformat()):
-                    await process_lottery_message(replace(message, source="pinned_today"))
+                if settings.daily_pinned_lottery_scan_enabled:
+                    pinned, _complete = await sender.get_current_pinned_messages(peer)
+                    today = shanghai_now().astimezone(shanghai_timezone).date().isoformat()
+                    for message in current_day_pinned(pinned, today):
+                        if stop_event.is_set():
+                            return
+                        await process_lottery_message(replace(message, source="pinned_today"))
+                if stop_event.is_set():
+                    return
                 cursor = lottery_store.scan_state(peer).get("cursor_message_id")
                 if cursor is None:
                     latest = await sender.get_latest_message_id(peer)
@@ -331,6 +358,8 @@ async def send_loop(
                 else:
                     messages = await sender.get_messages_after(peer, int(cursor), 500, None)
                     for message in messages:
+                        if stop_event.is_set():
+                            return
                         await process_lottery_message(message)
                     if messages:
                         lottery_store.commit_scan_batch(peer, max(message.message_id for message in messages), messages)
@@ -338,8 +367,6 @@ async def send_loop(
                 logger.exception("Lottery processing failed [%s]", peer)
                 if event_bus:
                     await event_bus.emit_alert(str(peer), "lottery_group_failed", "lottery processing failed")
-        while not stop_event.is_set() and await lottery_queue.run_once():
-            pass
 
     pending: dict[str, PendingCandidate] = {}
 
@@ -390,6 +417,16 @@ async def send_loop(
             await asyncio.sleep(0.5)
         if stop_event.is_set():
             break
+
+        if settings.lottery_enabled and lottery_store is not None:
+            for peer in (int(group) for group in groups):
+                if stop_event.is_set() or manager.state in (SendState.PAUSING, SendState.PAUSED):
+                    break
+                await scan_lottery_peer(peer)
+            while not stop_event.is_set() and await lottery_queue.run_once():
+                pass
+            if stop_event.is_set():
+                break
 
         if not _in_schedule(settings):
             if event_bus:
@@ -598,3 +635,35 @@ async def send_loop(
 
     total, _ = manager.runtime_counts_snapshot()
     logger.info("Participation loop exited (session total: %d)", total)
+
+
+async def send_loop(
+    sender: TelegramSender,
+    settings: Settings,
+    manager: SendLoopManager,
+    message_manager: MessageManager,
+    event_bus: EventBus | None = None,
+    ai_sender: AISender | None = None,
+    state_store: StateStore | None = None,
+    lottery_scan_clock: Callable[[], float] = monotonic,
+    shanghai_now: Callable[[], datetime] | None = None,
+) -> None:
+    """持有单实例锁运行主循环，并确保所有退出路径都释放锁。"""
+    instance_lock = InstanceLock(settings.phone, settings.state_db_path)
+    if not instance_lock.acquire():
+        manager.request_emergency_stop()
+        return
+    try:
+        await _send_loop_locked(
+            sender,
+            settings,
+            manager,
+            message_manager,
+            event_bus,
+            ai_sender,
+            state_store,
+            lottery_scan_clock,
+            shanghai_now,
+        )
+    finally:
+        instance_lock.release()
