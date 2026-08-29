@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import queue
+import re
 import sys
 import threading
 from collections import deque
 from concurrent.futures import Future
 from dataclasses import dataclass
 from threading import Lock
+from typing import Any, Mapping
 
 from src.config import Settings
 from src.lottery_integration import LotteryDashboardService, LotteryEventBus
@@ -18,6 +20,50 @@ from ui.message_manager import MessageManager
 from ui.send_loop import SendRuntime, SendState, send_loop
 
 logger = logging.getLogger(__name__)
+
+
+_SSE_SENSITIVE_FIELD_PARTS = (
+    "api_key",
+    "api-key",
+    "apikey",
+    "token",
+    "password",
+    "callback",
+    "phone",
+)
+_SSE_SENSITIVE_ASSIGNMENT = re.compile(
+    r"(?P<field>api[_ -]?key|token|password|callback(?:[_ -]?url)?|phone)"
+    r"(?P<separator>\s*[:=]\s*)(?P<value>[^\s,;，；]+)",
+    re.IGNORECASE,
+)
+_SSE_PHONE_NUMBER = re.compile(r"(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)")
+_SSE_REDACTED_VALUE = "[已脱敏]"
+
+
+def _redact_sse_text(value: str) -> str:
+    """替换文本中以字段赋值形式出现的敏感值和手机号。"""
+    value = _SSE_SENSITIVE_ASSIGNMENT.sub(
+        lambda match: f"{match.group('field')}{match.group('separator')}{_SSE_REDACTED_VALUE}",
+        value,
+    )
+    return _SSE_PHONE_NUMBER.sub(_SSE_REDACTED_VALUE, value)
+
+
+def _redact_sse_value(value: Any) -> Any:
+    """递归移除 SSE 载荷中的敏感字段，并脱敏自由文本。"""
+    if isinstance(value, Mapping):
+        return {
+            key: _redact_sse_value(item)
+            for key, item in value.items()
+            if not any(part in str(key).lower() for part in _SSE_SENSITIVE_FIELD_PARTS)
+        }
+    if isinstance(value, list):
+        return [_redact_sse_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_sse_value(item) for item in value)
+    if isinstance(value, str):
+        return _redact_sse_text(value)
+    return value
 
 
 class EventBus:
@@ -79,7 +125,8 @@ class EventBus:
         self._publish({"type": "health", "data": {"state": state, "message": message}})
 
     def _publish(self, event: dict) -> None:
-        """发布事件：分配递增 seq、入历史、广播至所有订阅者队列。"""
+        """脱敏后发布事件：分配递增 seq、入历史、广播至所有订阅者队列。"""
+        event = _redact_sse_value(event)
         with self._lock:
             self._seq += 1
             seq = self._seq
