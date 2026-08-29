@@ -1,21 +1,43 @@
-# Secrets
+# Secrets and credentials
 .env
+.env.*
+!.env.example
 *.session
 *.session-journal
+*.session-wal
+*.session-shm
 
-# Python
-__pycache__/
-.pytest_cache/
-*.pyc
-
-# Internal tooling
-.sisyphus/
-.omo/
-logs/
+# Local runtime state and databases
 state/
+*.db
 *.db-wal
 *.db-shm
+*.sqlite
+*.sqlite3
+
+# Python environments, bytecode, and caches
+.venv/
+venv/
+env/
+ENV/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local tooling and generated caches
+.codegraph/
+.hermes/cache/
+.sisyphus/
+.omo/
+.opencode/cache/
 .superpowers/
+.tmp/
+tmp/
+logs/
 
 # Auto-copied superpowers skills (repo-local skills like grill-me/ and openspec-*/ are tracked)
 .opencode/skills/*/
@@ -26,7 +48,7 @@ state/
 .vscode/
 .idea/
 
-# Temp / garbage
+# Temp / generated artifacts
 poc_*
 *_output.txt
 be_water_TG/
