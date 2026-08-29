@@ -11,8 +11,9 @@ from zoneinfo import ZoneInfo
 from src.config import Settings
 from src.group_identity import GroupIdentity
 from src.lottery_models import MessageSnapshot
+from src.lottery_store import LotteryStore
 from src.state_store import StateStore
-from ui.send_loop import _send_with_retry, send_loop
+from ui.send_loop import _in_schedule, _send_with_retry, send_loop
 
 
 def test_startup_locks_migrates_and_uses_only_peer_ids_for_checkin_and_state(
@@ -104,32 +105,6 @@ def _lottery_sender() -> MagicMock:
     return sender
 
 
-def _install_lottery_store(monkeypatch, initial_cursor: int | None = None) -> None:
-    """安装只实现扫描所需接口的内存仓储。"""
-    class LotteryStoreFake:
-        cursor = initial_cursor
-
-        def __init__(self, _path: str) -> None:
-            pass
-
-        def daily_batch_groups(self, _today: str) -> list[int]:
-            return [101]
-
-        def create_daily_batch(self, _today: str, _peers: list[int]) -> None:
-            pass
-
-        def is_frozen(self, _peer: int) -> bool:
-            return False
-
-        def scan_state(self, _peer: int) -> dict[str, int | None]:
-            return {"cursor_message_id": type(self).cursor}
-
-        def commit_scan_batch(self, _peer: int, latest: int, _messages: list[object]) -> None:
-            type(self).cursor = latest
-
-    monkeypatch.setattr("ui.send_loop.LotteryStore", LotteryStoreFake)
-
-
 def test_lottery_scans_each_peer_only_after_its_configured_full_interval(
     monkeypatch, tmp_path
 ) -> None:
@@ -141,7 +116,6 @@ def test_lottery_scans_each_peer_only_after_its_configured_full_interval(
         settings = _lottery_settings(tmp_path / str(interval_minutes), interval_minutes)
         advances = iter([interval_minutes * 60 - 1, 1, 0])
         wait_calls = 0
-        _install_lottery_store(monkeypatch)
 
         async def wait(_seconds: float, _stop_event: object, _event_bus: object = None) -> bool:
             nonlocal now, wait_calls
@@ -174,7 +148,6 @@ def test_lottery_pinned_filter_uses_shanghai_date(monkeypatch, tmp_path) -> None
     manager = _lottery_manager()
     settings = _lottery_settings(tmp_path, 60)
     detected: list[int] = []
-    _install_lottery_store(monkeypatch)
 
     async def detect(message: MessageSnapshot, _ai: object) -> SimpleNamespace:
         detected.append(message.message_id)
@@ -205,7 +178,7 @@ def test_lottery_pinned_switch_skips_pinned_read_but_keeps_incremental_scan(
     sender = _lottery_sender()
     manager = _lottery_manager()
     settings = _lottery_settings(tmp_path, 60, pinned_enabled=False)
-    _install_lottery_store(monkeypatch, initial_cursor=5)
+    LotteryStore(settings.state_db_path).commit_scan_batch(101, 5, [])
 
     async def wait(_seconds: float, _stop_event: object, _event_bus: object = None) -> bool:
         manager.stop_event.set()
@@ -245,7 +218,8 @@ def test_lottery_queue_and_executor_receive_configured_limits(monkeypatch, tmp_p
         def __init__(self, **kwargs: object) -> None:
             captured["queue"] = kwargs
 
-        async def run_once(self) -> bool:
+        async def run_once(self, *, stop_event: object) -> bool:
+            captured["queue_stop_event"] = stop_event
             return False
 
         async def put(self, _job: object) -> bool:
@@ -262,7 +236,6 @@ def test_lottery_queue_and_executor_receive_configured_limits(monkeypatch, tmp_p
     settings.lottery_action_gap_max_seconds = 9
     settings.lottery_per_group_daily_limit = 2
     settings.lottery_account_daily_limit = 5
-    _install_lottery_store(monkeypatch)
 
     async def wait(_seconds: float, _stop_event: object, _event_bus: object = None) -> bool:
         manager.stop_event.set()
@@ -277,3 +250,98 @@ def test_lottery_queue_and_executor_receive_configured_limits(monkeypatch, tmp_p
     assert captured["executor"]["per_group_limit"] == 2
     assert captured["executor"]["account_limit"] == 5
     assert captured["executor"]["local_date"]() == datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    assert captured["queue_stop_event"] is manager.stop_event
+
+
+def test_lottery_scan_uses_real_sqlite_store_for_baseline_and_incremental_cursor(
+    monkeypatch, tmp_path
+) -> None:
+    """冷启动只建基线，下一轮把真实消息批次游标提交到 SQLite。"""
+    sender = _lottery_sender()
+    manager = _lottery_manager()
+    settings = _lottery_settings(tmp_path, 0, pinned_enabled=False)
+    message = MessageSnapshot(101, 12, "普通消息", occurred_at="2026-08-29T09:00:00+08:00")
+    sender.get_latest_message_id.return_value = 10
+    sender.get_messages_after.return_value = [message]
+    waits = 0
+
+    async def wait(_seconds: float, _stop_event: object, _event_bus: object = None) -> bool:
+        nonlocal waits
+        waits += 1
+        if waits == 2:
+            manager.stop_event.set()
+        return not manager.stop_event.is_set()
+
+    monkeypatch.setattr("ui.send_loop._interruptible_wait", wait)
+    asyncio.run(send_loop(sender, settings, manager, MagicMock(), lottery_scan_clock=lambda: 0.0))
+
+    assert LotteryStore(settings.state_db_path).scan_state(101)["cursor_message_id"] == 12
+    sender.get_latest_message_id.assert_awaited_once_with(101)
+    sender.get_messages_after.assert_awaited_once_with(101, 10, 500, None)
+
+
+def test_checkin_daily_snapshot_is_intersected_with_current_target_peers(monkeypatch, tmp_path) -> None:
+    """重启后已移除的群即使仍在当日快照也不得外发签到。"""
+    settings = Settings(
+        api_id=1, api_hash="x" * 32, phone="+1", target_groups=["https://t.me/allowed"],
+        state_db_path=str(tmp_path / "state.db"), lottery_enabled=False, daily_checkin_enabled=True,
+    )
+    now = datetime(2026, 8, 29, 9, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    LotteryStore(settings.state_db_path).create_daily_batch(now.date().isoformat(), [101, 202])
+    sender = _lottery_sender()
+    manager = _lottery_manager()
+    sender.send_group_text = AsyncMock(return_value=1)
+
+    async def wait(_seconds: float, _stop_event: object, _event_bus: object = None) -> bool:
+        manager.stop_event.set()
+        return False
+
+    monkeypatch.setattr("ui.send_loop._interruptible_wait", wait)
+    asyncio.run(send_loop(sender, settings, manager, MagicMock(), shanghai_now=lambda: now))
+
+    assert [call.args[0] for call in sender.send_group_text.await_args_list] == [101]
+
+
+def test_schedule_converts_injected_datetime_to_asia_shanghai() -> None:
+    """排程判断将可注入 UTC 时间转换为固定上海时区。"""
+    settings = Settings(api_id=1, api_hash="x" * 32, phone="+1", target_groups=["https://t.me/allowed"])
+    settings.schedule_enabled = True
+    settings.schedule_morning_start = "08:00"
+    settings.schedule_morning_end = "09:00"
+    settings.schedule_afternoon_start = "14:00"
+    settings.schedule_afternoon_end = "15:00"
+
+    assert _in_schedule(settings, datetime(2026, 8, 29, 0, 30, tzinfo=ZoneInfo("UTC"))) is True
+
+
+def test_lottery_stop_clears_queue_and_events_only_expose_safe_identifiers(
+    monkeypatch, tmp_path
+) -> None:
+    """停机清空队列，管理器事件只携带稳定 ID 与固定状态码。"""
+    stopped: list[bool] = []
+
+    class Queue:
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def run_once(self, *, stop_event: threading.Event) -> bool:
+            stop_event.set()
+            return False
+
+        async def stop(self) -> None:
+            stopped.append(True)
+
+    sender = _lottery_sender()
+    manager = _lottery_manager()
+    manager.emit_lottery_event = AsyncMock()
+    settings = _lottery_settings(tmp_path, 60, pinned_enabled=False)
+    monkeypatch.setattr("ui.send_loop.LotteryQueue", Queue)
+
+    asyncio.run(send_loop(sender, settings, manager, MagicMock(), lottery_scan_clock=lambda: 0.0))
+
+    assert stopped == [True]
+    assert manager.emit_lottery_event.await_args_list
+    for call in manager.emit_lottery_event.await_args_list:
+        event_type, payload = call.args
+        assert event_type in {"lottery_alert", "lottery_updated", "scan_health", "checkin_health"}
+        assert set(payload) <= {"peer_id", "lottery_id", "reason", "status"}
