@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
 
+from src.group_identity import migrate_group_identities as migrate_stable_group_identities
+
 
 APP_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
@@ -104,6 +106,13 @@ class StateStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_audit_event_time
                     ON audit_event(occurred_at DESC);
+                CREATE TABLE IF NOT EXISTS group_identity (
+                    peer_id INTEGER PRIMARY KEY, configured_ref TEXT NOT NULL,
+                    title TEXT NOT NULL, username TEXT, display_link TEXT
+                );
+                CREATE TABLE IF NOT EXISTS group_identity_alias (
+                    configured_ref TEXT PRIMARY KEY, peer_id INTEGER NOT NULL
+                );
                 """
             )
             columns = {
@@ -122,6 +131,11 @@ class StateStore:
                 connection.execute(
                     "ALTER TABLE group_state ADD COLUMN pending_reservation_at TEXT"
                 )
+
+    def migrate_group_identities(self, identities: list[object]) -> None:
+        """事务化写入 peer_id 与别名，旧 URL 状态保守合并到稳定 ID。"""
+        with closing(self._connect()) as connection:
+            migrate_stable_group_identities(connection, identities)
 
     def _clock(self) -> tuple[datetime, str, str]:
         value = self._now()

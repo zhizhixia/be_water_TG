@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -125,3 +126,24 @@ def test_audit_round_trip(tmp_path) -> None:
     event = store.list_audit()[0]
     assert event.group == "group-a"
     assert event.metadata == {"allowed": False}
+
+
+def test_identity_migration_uses_peer_id_and_preserves_most_restrictive_state(tmp_path) -> None:
+    """URL 与 peer 状态合并后，所有字段和审计都以稳定 peer_id 保守延续。"""
+    store = StateStore(tmp_path / "state.db")
+    old_ref, peer = "https://t.me/allowed", 101
+    store.pause_group(old_ref, PauseKind.SAFETY, "管理员警告")
+    store.touch_activity(old_ref, datetime(2026, 7, 28, 12, 0, tzinfo=TZ), 9)
+    store.get_group_state(str(peer))
+    store.touch_activity(str(peer), datetime(2026, 7, 28, 13, 0, tzinfo=TZ), 12)
+
+    store.migrate_group_identities([SimpleNamespace(
+        peer_id=peer, configured_ref=old_ref, title="允许群", username="allowed", display_link="https://t.me/allowed",
+    )])
+
+    state = store.get_group_state(str(peer))
+    assert state.pause_kind is PauseKind.SAFETY
+    assert state.pause_reason == "管理员警告"
+    assert state.last_message_id == 12
+    assert all(item.group != old_ref for item in store.list_group_states())
+    assert any(item.event_type == "GROUP_IDENTITY_MIGRATED" and item.group == str(peer) for item in store.list_audit())
