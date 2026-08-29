@@ -3,6 +3,7 @@
 const appState = {
   config: {},
   dashboard: {state: "idle", total: 0, groups: [], alerts: []},
+  lotteryPage: {offset: 0, limit: 50, total: 0, items: []},
   dirty: false,
   evtSource: null,
   toastTimer: null,
@@ -98,6 +99,17 @@ function renderDashboard() {
   updateStatus(dashboard.state || "idle");
 }
 
+function renderLotteryAlerts() {
+  const page = appState.lotteryPage;
+  byId("lotteryAlertTotal").textContent = page.total;
+  byId("lotteryPageInfo").textContent = `第 ${Math.floor(page.offset / page.limit) + 1} 页，共 ${page.total} 条`;
+  byId("lotteryPrev").disabled = page.offset === 0;
+  byId("lotteryNext").disabled = page.offset + page.limit >= page.total;
+  const list = byId("lotteryAlertList");
+  if (!page.items.length) { list.innerHTML = '<div class="empty">暂无待处理抽奖告警</div>'; return; }
+  list.innerHTML = page.items.map((item) => `<div class="alert-item"><strong>抽奖 #${escapeHtml(item.id)}</strong><span>${escapeHtml(item.summary || item.status)}</span><button class="button secondary open-lottery" data-id="${escapeHtml(item.id)}">打开消息</button></div>`).join("");
+}
+
 async function api(url, options = {}) {
   const response = await fetch(url, {headers: {"Content-Type": "application/json"}, ...options});
   const data = await response.json().catch(() => ({}));
@@ -114,9 +126,29 @@ async function loadDashboard() {
     const data = await api("/api/dashboard");
     appState.dashboard = data.dashboard;
     renderDashboard();
+    if (data.dashboard.lottery_alert_total !== undefined) byId("lotteryAlertTotal").textContent = data.dashboard.lottery_alert_total;
   } catch (error) {
     showToast(`状态加载失败：${error.message}`, "error");
   }
+}
+
+async function loadLotteryAlerts(offset = appState.lotteryPage.offset) {
+  try {
+    const data = await api(`/api/lotteries?offset=${offset}&limit=${appState.lotteryPage.limit}`);
+    appState.lotteryPage = {offset: data.offset, limit: data.limit, total: data.total, items: data.items};
+    renderLotteryAlerts();
+  } catch (error) { showToast(`抽奖告警加载失败：${error.message}`, "error"); }
+}
+
+async function openLottery(id) {
+  try {
+    const data = await api(`/api/lotteries/${encodeURIComponent(id)}/open`, {method: "POST", body: "{}"});
+    window.open(data.url, "_blank", "noopener");
+    if (data.fallback) showToast(`无法生成消息深链，请在群消息 ID ${data.message_id} 处查看`);
+    else showToast("已打开消息；请自行完成核验", "success");
+    await loadLotteryAlerts();
+    await loadDashboard();
+  } catch (error) { showToast(`抽奖操作失败：${error.message}`, "error"); }
 }
 
 function setInput(id, value) {
@@ -279,6 +311,7 @@ function connectSSE() {
     if (payload.type === "decision") { const text = `${groupName(data.group)} · ${data.action} · ${data.reason}`; byId("latestDecision").textContent = text; appendLog("decision", text); }
     if (payload.type === "alert") { appendLog("warning", `${groupName(data.group)} · ${data.message}`); loadDashboard(); }
     if (payload.type === "group_state") loadDashboard();
+    if (["lottery_alert", "lottery_updated", "scan_health", "checkin_health"].includes(payload.type)) { loadLotteryAlerts(); loadDashboard(); }
     if (payload.type === "code_required") { byId("codeArea").hidden = false; setView("activity"); byId("codeInput").focus(); }
   };
 }
@@ -322,10 +355,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   byId("clearLog").addEventListener("click", () => { byId("logTerminal").innerHTML = '<div class="log-line muted">视图已清空</div>'; });
   byId("submitCode").addEventListener("click", submitCode);
   byId("codeInput").addEventListener("keydown", (event) => { if (event.key === "Enter") submitCode(); });
-  document.addEventListener("click", (event) => { const button = event.target.closest(".resume-group"); if (button) resumeGroup(button.dataset.group); });
+  document.addEventListener("click", (event) => { const resume = event.target.closest(".resume-group"); if (resume) resumeGroup(resume.dataset.group); const lottery = event.target.closest(".open-lottery"); if (lottery) openLottery(lottery.dataset.id); });
+  byId("lotteryPrev").addEventListener("click", () => loadLotteryAlerts(Math.max(0, appState.lotteryPage.offset - appState.lotteryPage.limit)));
+  byId("lotteryNext").addEventListener("click", () => loadLotteryAlerts(appState.lotteryPage.offset + appState.lotteryPage.limit));
   window.addEventListener("beforeunload", (event) => { if (appState.dirty) { event.preventDefault(); event.returnValue = ""; } });
   await loadConfig();
   await loadDashboard();
+  await loadLotteryAlerts();
   connectSSE();
   setInterval(loadDashboard, 30000);
 });

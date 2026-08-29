@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from threading import Lock
 
 from src.config import Settings
+from src.lottery_integration import LotteryDashboardService, LotteryEventBus
 from src.sender import TelegramSender
 from src.state_store import StateStore
 from ui.message_manager import MessageManager
@@ -209,6 +210,8 @@ class SendLoopManager:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._state_store: StateStore | None = None
         self._active_settings: Settings | None = None
+        self.lottery_dashboard = LotteryDashboardService()
+        self._lottery_events = LotteryEventBus(lambda: None)
 
     @property
     def state(self) -> SendState:
@@ -428,3 +431,9 @@ class SendLoopManager:
 
     def submit_code(self, code: str) -> bool:
         return self._event_bus.submit_code(code)
+
+    async def emit_lottery_event(self, event_type: str, data: dict) -> None:
+        """发布脱敏后的抽奖 SSE 事件，供扫描和签到适配器调用。"""
+        if event_type not in {"lottery_alert", "lottery_updated", "scan_health", "checkin_health"}:
+            raise ValueError("不支持的抽奖事件类型")
+        self._event_bus._publish(self._lottery_events.publish(event_type, data))

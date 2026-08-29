@@ -12,6 +12,7 @@
     <article class="card wide"><div class="card-heading"><div><h2>群组状态</h2><p>每个群组独立计数和停发</p></div><button class="text-button" data-go="groups">管理群组 →</button></div><div class="table-wrap"><table><thead><tr><th>群组</th><th>状态</th><th>今日</th><th>最近决策</th></tr></thead><tbody id="overviewGroupRows"><tr><td colspan="4" class="empty">尚未加载状态</td></tr></tbody></table></div></article>
     <article class="card"><div class="card-heading"><div><h2>需要处理</h2><p>严重告警需人工恢复</p></div></div><div id="alertList" class="alert-list"><div class="empty">暂无告警</div></div></article>
   </div>
+  <article class="card"><div class="card-heading"><div><h2>抽奖告警</h2><p>待处理 <strong id="lotteryAlertTotal">0</strong> 条；打开消息仅关闭提醒，不代表已经完成核验。</p></div></div><div id="lotteryAlertList" class="alert-list"><div class="empty">暂无待处理抽奖告警</div></div><div class="form-actions"><button class="button secondary" id="lotteryPrev">上一页</button><span id="lotteryPageInfo">第 1 页</span><button class="button secondary" id="lotteryNext">下一页</button></div></article>
   <article class="live-strip"><span class="live-dot"></span><code id="latestDecision">等待运行事件…</code><span id="sseState">SSE 连接中</span></article>
 </section>
 
@@ -42,7 +43,7 @@
 </section>
 
 <section class="view" id="viewSystem">
-  <header class="page-header"><div><p class="eyebrow">SYSTEM SETTINGS</p><h1>系统设置</h1><p class="page-subtitle">Telegram 凭据、代理和工作时段。</p></div></header>
+  <header class="page-header"><div><p class="eyebrow">SYSTEM SETTINGS</p><h1>系统设置</h1><p class="page-subtitle">Telegram 凭据、代理和工作时段。</p></div></header><div class="notice"><strong>抽奖与签到配置</strong><span>全局生效，不按群组分别配置；仅对授权群组运行。</span></div>
   <article class="card form-card"><h2>Telegram 凭据</h2><div class="form-grid two"><div class="field"><label for="api_id">API ID</label><input id="api_id" inputmode="numeric"></div><div class="field"><label for="api_hash">API Hash</label><input id="api_hash" type="password" placeholder="留空则保留已保存值"></div></div><div class="field"><label for="phone">手机号</label><input id="phone" placeholder="+8613800138000"></div><hr><h2>代理</h2><div class="form-grid three"><div class="field"><label for="proxy_host">地址</label><input id="proxy_host" placeholder="可选"></div><div class="field"><label for="proxy_port">端口</label><input id="proxy_port" type="number" placeholder="7890"></div><div class="field"><label for="proxy_type">类型</label><select id="proxy_type"><option value="http">HTTP</option><option value="socks5">SOCKS5</option><option value="socks4">SOCKS4</option></select></div></div><hr><label class="switch-line"><input type="checkbox" id="schedule_enabled"><span class="switch"></span><span><strong>限制工作时段</strong><small>时段外只观察，不发送</small></span></label><div id="scheduleFields" class="form-grid four"><div class="field"><label for="schedule_morning_start">上午开始</label><input id="schedule_morning_start" value="08:00"></div><div class="field"><label for="schedule_morning_end">上午结束</label><input id="schedule_morning_end" value="11:00"></div><div class="field"><label for="schedule_afternoon_start">下午开始</label><input id="schedule_afternoon_start" value="14:00"></div><div class="field"><label for="schedule_afternoon_end">下午结束</label><input id="schedule_afternoon_end" value="18:00"></div></div><div class="form-actions"><button class="button primary" data-save>保存系统设置</button></div></article>
 </section>
 {% endblock %}

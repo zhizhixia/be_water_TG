@@ -19,6 +19,7 @@ from src.config import (
 )
 from src.group_parser import parse_group_links, validate_group_links
 from src.sender import TelegramSender
+from src.lottery_store import LotteryStore
 from src.state_store import StateStore
 from ui.message_manager import MessageManager
 from web_manager import LogQueueHandler, SendLoopManager
@@ -278,7 +279,83 @@ def api_dashboard():
             }
         except Exception as ex:
             return jsonify({"success": False, "error": str(ex)}), 400
+    try:
+        settings = load_settings()
+        alerts, total = LotteryStore(settings.state_db_path).list_alerts(limit=50, offset=0)
+        snapshot["lottery_alerts"] = [_lottery_alert_payload(item) for item in alerts]
+        snapshot["lottery_alert_total"] = total
+    except Exception:
+        snapshot["lottery_alerts"] = []
+        snapshot["lottery_alert_total"] = 0
     return jsonify({"success": True, "dashboard": snapshot})
+
+
+def _lottery_alert_payload(item):
+    """将仓储实体转换为不包含 Telegram 回调和凭据的浏览器摘要。"""
+    return {
+        "id": item.id,
+        "peer_id": item.peer_id,
+        "message_id": item.message_id,
+        "status": item.participation_status.value,
+        "summary": item.summary,
+    }
+
+
+def _lottery_open_url(peer_id: int, message_id: int) -> tuple[str, bool]:
+    """返回 Telegram 消息链接；未知公开用户名时降级为私有群链接。"""
+    return f"https://t.me/c/{peer_id}/{message_id}", True
+
+
+@app.route("/api/lotteries", methods=["GET"])
+def api_lottery_list():
+    """分页读取待处理抽奖提醒，不改变提醒状态或冻结状态。"""
+    try:
+        offset = max(0, int(request.args.get("offset", "0")))
+        limit = min(50, max(1, int(request.args.get("limit", "50"))))
+    except ValueError:
+        return jsonify({"success": False, "error": "分页参数必须是整数"}), 400
+    try:
+        settings = load_settings()
+        alerts, total = LotteryStore(settings.state_db_path).list_alerts(limit=limit, offset=offset)
+        items = [_lottery_alert_payload(item) for item in alerts]
+        return jsonify({"success": True, "alerts": items, "items": items, "total": total, "offset": offset, "limit": limit})
+    except Exception as ex:
+        return jsonify({"success": False, "alerts": [], "items": [], "total": 0, "offset": offset, "limit": limit, "error": str(ex)}), 400
+
+
+@app.route("/api/lotteries/<int:lottery_id>/open", methods=["POST"])
+def api_lottery_open(lottery_id: int):
+    """原子关闭抽奖提醒；未知结果时同时解除该群抽奖冻结。"""
+    try:
+        item = LotteryStore(load_settings().state_db_path).open_alert(lottery_id)
+        if item is None:
+            return jsonify({"success": False, "error": "未找到抽奖提醒"}), 404
+        url, fallback = _lottery_open_url(item.peer_id, item.message_id)
+        return jsonify({"success": True, "url": url, "fallback": fallback, "message_id": item.message_id, "lottery": _lottery_alert_payload(item)})
+    except Exception as ex:
+        return jsonify({"success": False, "error": str(ex)}), 400
+
+
+@app.route("/api/lotteries/cleanup", methods=["POST"])
+def api_lottery_cleanup():
+    """仅在空闲或已停止状态、收到中文二次确认后清理历史。"""
+    if manager.state.value not in {"idle", "stopped"}:
+        return jsonify({"success": False, "error": "请先停止自动任务后再清理抽奖历史"}), 409
+    data = request.get_json(silent=True) or {}
+    cutoff = str(data.get("before", "")).strip()
+    if "confirm" in data and data.get("confirm") != "确认清理":
+        return jsonify({"success": False, "error": "请输入“确认清理”进行二次确认"}), 400
+    try:
+        from datetime import date
+        date.fromisoformat(cutoff)
+        if manager.state.value not in {"idle", "stopped"}:
+            return jsonify({"success": False, "error": "自动任务状态已变化，请重新确认"}), 409
+        deleted = LotteryStore(load_settings().state_db_path).cleanup_before(cutoff)
+        return jsonify({"success": True, "deleted": deleted})
+    except ValueError:
+        return jsonify({"success": False, "error": "清理日期必须是 ISO 日期"}), 400
+    except Exception as ex:
+        return jsonify({"success": False, "error": str(ex)}), 400
 
 
 @app.route("/api/audit")
