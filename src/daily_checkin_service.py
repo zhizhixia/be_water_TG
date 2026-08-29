@@ -36,7 +36,7 @@ class DailyCheckinService:
         """抽奖不受签到失败门控影响。"""
         return True
 
-    async def attempt(self, peer_id: int, group: str) -> str:
+    async def attempt(self, peer_id: int, group: str, stop_event: object | None = None) -> str:
         """预留、发送、确认签到；确认失败后立即 fail-closed。"""
         today = local_date(self.clock)
         if not self.store.claim_daily_task(peer_id, today, "CHECKIN"):
@@ -45,6 +45,11 @@ class DailyCheckinService:
         try:
             self.state_store.reserve_send(group, self.daily_limit)
             reserved = True
+            if stop_event is not None and stop_event.is_set():
+                self.state_store.release_send_reservation(group)
+                reserved = False
+                self.store.finish_daily_task(peer_id, today, "CHECKIN", "STOPPED")
+                return "STOPPED"
             await self.sender.send_group_text(peer_id, "签到")
             try:
                 self.state_store.confirm_send(group, self.daily_limit)
