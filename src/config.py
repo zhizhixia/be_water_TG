@@ -68,6 +68,14 @@ class Settings:
     reply_delay_min: int = 20
     reply_delay_max: int = 90
     state_db_path: str = "state/be_water.db"
+    lottery_enabled: bool = True
+    lottery_scan_interval_minutes: int = 60
+    daily_pinned_lottery_scan_enabled: bool = True
+    daily_checkin_enabled: bool = True
+    lottery_per_group_daily_limit: int = 10
+    lottery_account_daily_limit: int = 30
+    lottery_action_gap_min_seconds: int = 20
+    lottery_action_gap_max_seconds: int = 60
 
     def __post_init__(self) -> None:
         """同步 target_group 与 target_groups 以保持向后兼容。"""
@@ -117,6 +125,18 @@ def validate_participation_settings(settings: Settings) -> None:
         raise ValueError("REPLY_DELAY_MAX must be >= REPLY_DELAY_MIN")
     if not settings.state_db_path.strip():
         raise ValueError("STATE_DB_PATH must not be empty")
+    if not 15 <= settings.lottery_scan_interval_minutes <= 1440:
+        raise ValueError("LOTTERY_SCAN_INTERVAL_MINUTES must be between 15 and 1440")
+    if not 1 <= settings.lottery_per_group_daily_limit <= 50:
+        raise ValueError("LOTTERY_PER_GROUP_DAILY_LIMIT must be between 1 and 50")
+    if not 1 <= settings.lottery_account_daily_limit <= 200:
+        raise ValueError("LOTTERY_ACCOUNT_DAILY_LIMIT must be between 1 and 200")
+    if settings.lottery_account_daily_limit < settings.lottery_per_group_daily_limit:
+        raise ValueError("LOTTERY_ACCOUNT_DAILY_LIMIT must be >= LOTTERY_PER_GROUP_DAILY_LIMIT")
+    if not 5 <= settings.lottery_action_gap_min_seconds <= 600:
+        raise ValueError("LOTTERY_ACTION_GAP_MIN_SECONDS must be between 5 and 600")
+    if not settings.lottery_action_gap_min_seconds <= settings.lottery_action_gap_max_seconds <= 600:
+        raise ValueError("LOTTERY_ACTION_GAP_MAX_SECONDS must be between min gap and 600")
 
 
 def validate_settings_for_save(settings: Settings) -> None:
@@ -151,6 +171,11 @@ def validate_settings_for_save(settings: Settings) -> None:
             raise SettingsValidationError("schedule_morning_start", "Invalid schedule time") from exc
         if any(start > end for start, end in windows):
             raise SettingsValidationError("schedule_morning_start", "Schedule start must not be after end")
+    try:
+        validate_participation_settings(settings)
+    except ValueError as exc:
+        field = str(exc).split(" must", 1)[0].lower()
+        raise SettingsValidationError(field, str(exc)) from exc
 
 
 def _parse_legacy_message_file(part: str) -> tuple[str, str]:
@@ -300,6 +325,14 @@ def load_settings() -> Settings:
     reply_delay_min = int(os.getenv("REPLY_DELAY_MIN", "20"))
     reply_delay_max = int(os.getenv("REPLY_DELAY_MAX", "90"))
     state_db_path = os.getenv("STATE_DB_PATH", "state/be_water.db")
+    lottery_enabled = os.getenv("LOTTERY_ENABLED", "true").lower() in ("true", "1", "yes")
+    lottery_scan_interval_minutes = int(os.getenv("LOTTERY_SCAN_INTERVAL_MINUTES", "60"))
+    daily_pinned_lottery_scan_enabled = os.getenv("DAILY_PINNED_LOTTERY_SCAN_ENABLED", "true").lower() in ("true", "1", "yes")
+    daily_checkin_enabled = os.getenv("DAILY_CHECKIN_ENABLED", "true").lower() in ("true", "1", "yes")
+    lottery_per_group_daily_limit = int(os.getenv("LOTTERY_PER_GROUP_DAILY_LIMIT", "10"))
+    lottery_account_daily_limit = int(os.getenv("LOTTERY_ACCOUNT_DAILY_LIMIT", "30"))
+    lottery_action_gap_min_seconds = int(os.getenv("LOTTERY_ACTION_GAP_MIN_SECONDS", "20"))
+    lottery_action_gap_max_seconds = int(os.getenv("LOTTERY_ACTION_GAP_MAX_SECONDS", "60"))
 
     if group_gap_max < group_gap_min:
         raise ValueError(
@@ -347,6 +380,14 @@ def load_settings() -> Settings:
         reply_delay_min=reply_delay_min,
         reply_delay_max=reply_delay_max,
         state_db_path=state_db_path,
+        lottery_enabled=lottery_enabled,
+        lottery_scan_interval_minutes=lottery_scan_interval_minutes,
+        daily_pinned_lottery_scan_enabled=daily_pinned_lottery_scan_enabled,
+        daily_checkin_enabled=daily_checkin_enabled,
+        lottery_per_group_daily_limit=lottery_per_group_daily_limit,
+        lottery_account_daily_limit=lottery_account_daily_limit,
+        lottery_action_gap_min_seconds=lottery_action_gap_min_seconds,
+        lottery_action_gap_max_seconds=lottery_action_gap_max_seconds,
     )
 
 
@@ -403,6 +444,14 @@ def save_settings(settings: Settings, path: str | None = None) -> None:
     new_values["REPLY_DELAY_MIN"] = str(settings.reply_delay_min)
     new_values["REPLY_DELAY_MAX"] = str(settings.reply_delay_max)
     new_values["STATE_DB_PATH"] = settings.state_db_path
+    new_values["LOTTERY_ENABLED"] = str(settings.lottery_enabled).lower()
+    new_values["LOTTERY_SCAN_INTERVAL_MINUTES"] = str(settings.lottery_scan_interval_minutes)
+    new_values["DAILY_PINNED_LOTTERY_SCAN_ENABLED"] = str(settings.daily_pinned_lottery_scan_enabled).lower()
+    new_values["DAILY_CHECKIN_ENABLED"] = str(settings.daily_checkin_enabled).lower()
+    new_values["LOTTERY_PER_GROUP_DAILY_LIMIT"] = str(settings.lottery_per_group_daily_limit)
+    new_values["LOTTERY_ACCOUNT_DAILY_LIMIT"] = str(settings.lottery_account_daily_limit)
+    new_values["LOTTERY_ACTION_GAP_MIN_SECONDS"] = str(settings.lottery_action_gap_min_seconds)
+    new_values["LOTTERY_ACTION_GAP_MAX_SECONDS"] = str(settings.lottery_action_gap_max_seconds)
 
     env_path = Path(path)
     lines: list[str] = []

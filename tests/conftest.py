@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import socket
 import threading
 from collections.abc import AsyncIterator
 from unittest.mock import AsyncMock
@@ -9,6 +10,36 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.config import Settings
+from tests.fakes import FakeClock, FakeLotteryAI, FakeRandom, FakeSleeper, FakeTelegramSender
+
+
+@pytest.fixture(autouse=True)
+def block_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """所有测试禁用 socket，避免 fake 漏洞连接到外部服务。"""
+    def denied(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("network access is disabled in tests")
+
+    monkeypatch.setattr(socket, "create_connection", denied)
+
+
+@pytest.fixture
+def fake_clock() -> FakeClock:
+    return FakeClock()
+
+
+@pytest.fixture
+def fake_sleeper() -> FakeSleeper:
+    return FakeSleeper()
+
+
+@pytest.fixture
+def fake_random() -> FakeRandom:
+    return FakeRandom()
+
+
+@pytest.fixture
+def fake_lottery_ai() -> FakeLotteryAI:
+    return FakeLotteryAI()
 
 
 @pytest.fixture
@@ -36,9 +67,9 @@ def make_settings() -> Settings:
 
 
 @pytest.fixture
-def fake_sender() -> AsyncMock:
+def fake_sender() -> FakeTelegramSender:
     """mock TelegramSender：所有方法是 AsyncMock，默认 connect/disconnect/send_message 无副作用。"""
-    sender = AsyncMock()
+    sender = FakeTelegramSender()
     sender.connect = AsyncMock(return_value=None)
     sender.start = AsyncMock(return_value=None)
     sender.send_message = AsyncMock(return_value=None)
