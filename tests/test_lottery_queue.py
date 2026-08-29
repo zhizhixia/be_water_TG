@@ -1,4 +1,6 @@
 import asyncio
+import threading
+
 import pytest
 from src.lottery_queue import LotteryQueue
 
@@ -58,9 +60,64 @@ async def completed():
 
 
 @pytest.mark.asyncio
-async def test_stop_cancels_not_yet_called_jobs():
-    queue = LotteryQueue(); called = []
-    async def job(): called.append(True)
-    await queue.put(job); queue.stop()
+async def test_run_once_observes_pre_set_stop_event():
+    """外部停止信号已设置时，run_once 不会启动排队作业。"""
+    stop_event = threading.Event()
+    stop_event.set()
+    queue = LotteryQueue()
+    called = []
+
+    async def job():
+        called.append(True)
+
+    await queue.put(job)
+
+    assert await queue.run_once(stop_event=stop_event) is False
+    assert called == []
+
+
+@pytest.mark.asyncio
+async def test_stop_event_during_inter_lottery_wait_returns_before_next_job():
+    """条目间等待检测到停止后，在一个短等待边界内结束且不执行下一作业。"""
+    stop_event = threading.Event()
+    sleeps, called = [], []
+
+    async def sleeper(seconds):
+        sleeps.append(seconds)
+        stop_event.set()
+
+    queue = LotteryQueue(random_int=lambda _low, _high: 20, sleeper=sleeper)
+
+    async def first_job():
+        called.append("first")
+
+    async def second_job():
+        called.append("second")
+
+    await queue.put(first_job)
+    await queue.put(second_job)
+
+    assert await queue.run_once(stop_event=stop_event) is True
+    assert await queue.run_once(stop_event=stop_event) is False
+    assert called == ["first"]
+    assert sleeps and sleeps[0] < 20
+
+
+@pytest.mark.asyncio
+async def test_stop_rejects_new_jobs_and_clears_unstarted_jobs():
+    """停止会清空未开始作业，并拒绝之后的新增作业。"""
+    queue = LotteryQueue()
+    called = []
+
+    async def queued_job():
+        called.append("queued")
+
+    async def new_job():
+        called.append("new")
+
+    assert await queue.put(queued_job) is True
+    queue.stop()
+
+    assert await queue.put(new_job) is False
     assert await queue.run_once() is False
     assert called == []

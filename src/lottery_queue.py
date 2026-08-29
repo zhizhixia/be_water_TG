@@ -2,6 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from typing import Protocol
+
+
+class StopEvent(Protocol):
+    """可由队列轮询的外部停止信号。"""
+
+    def is_set(self) -> bool:
+        """返回停止信号是否已设置。"""
 
 
 class LotteryQueue:
@@ -30,18 +38,34 @@ class LotteryQueue:
         await self._queue.put(job)
         return True
 
-    async def run_once(self) -> bool:
-        """串行执行一个作业，并仅在不同抽奖之间注入可配置等待（默认 20–60 秒）。"""
+    async def run_once(self, stop_event: StopEvent | None = None) -> bool:
+        """串行执行一个作业，并在外部停止信号触发时中断条目间等待。"""
         async with self._worker_lock:
-            if self.stopped or self._queue.empty(): return False
+            if self._is_stopped(stop_event) or self._queue.empty(): return False
             if self._started:
-                await self._sleeper(self._random_int(self._wait_min_seconds, self._wait_max_seconds))
-                if self.stopped: return False
+                wait_seconds = self._random_int(self._wait_min_seconds, self._wait_max_seconds)
+                if stop_event is None:
+                    await self._sleeper(wait_seconds)
+                else:
+                    await self._wait_interruptibly(wait_seconds, stop_event)
+                if self._is_stopped(stop_event): return False
             job = await self._queue.get()
-            if self.stopped: return False
+            if self._is_stopped(stop_event): return False
             self._started = True
             await job()
             return True
+
+    async def _wait_interruptibly(self, seconds: int, stop_event: StopEvent) -> None:
+        """以短等待边界轮询外部停止信号，避免阻塞完整抽奖间隔。"""
+        remaining = seconds
+        while remaining > 0 and not self._is_stopped(stop_event):
+            interval = min(0.1, remaining)
+            await self._sleeper(interval)
+            remaining -= interval
+
+    def _is_stopped(self, stop_event: StopEvent | None) -> bool:
+        """统一判断队列自身和外部停止信号。"""
+        return self.stopped or (stop_event is not None and stop_event.is_set())
 
     def stop(self) -> None:
         """取消未开始作业；当前调用结束后不会再开启下一动作。"""
