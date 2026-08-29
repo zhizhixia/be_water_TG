@@ -339,8 +339,6 @@ def api_lottery_open(lottery_id: int):
 @app.route("/api/lotteries/cleanup", methods=["POST"])
 def api_lottery_cleanup():
     """仅在空闲或已停止状态、收到中文二次确认后清理历史。"""
-    if manager.state.value not in {"idle", "stopped"}:
-        return jsonify({"success": False, "error": "请先停止自动任务后再清理抽奖历史"}), 409
     data = request.get_json(silent=True) or {}
     cutoff = str(data.get("before", "")).strip()
     if data.get("confirm") != "确认清理":
@@ -348,12 +346,16 @@ def api_lottery_cleanup():
     try:
         from datetime import date
         date.fromisoformat(cutoff)
-        if manager.state.value not in {"idle", "stopped"}:
-            return jsonify({"success": False, "error": "自动任务状态已变化，请重新确认"}), 409
-        deleted = LotteryStore(load_settings().state_db_path).cleanup_before(cutoff)
-        return jsonify({"success": True, "deleted": deleted})
     except ValueError:
         return jsonify({"success": False, "error": "清理日期必须是 ISO 日期"}), 400
+
+    try:
+        result, deleted = manager.run_cleanup_atomically(
+            lambda: LotteryStore(load_settings().state_db_path).cleanup_before(cutoff)
+        )
+        if not result.ok:
+            return jsonify({"success": False, "error": "请先停止自动任务后再清理抽奖历史"}), 409
+        return jsonify({"success": True, "deleted": deleted})
     except Exception as ex:
         return jsonify({"success": False, "error": str(ex)}), 400
 

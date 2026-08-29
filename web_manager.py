@@ -10,7 +10,7 @@ from collections import deque
 from concurrent.futures import Future
 from dataclasses import dataclass
 from threading import Lock
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping, TypeVar
 
 from src.config import Settings
 from src.lottery_integration import LotteryDashboardService, LotteryEventBus
@@ -227,6 +227,9 @@ class TransitionResult:
     reason: str = ""
 
 
+T = TypeVar("T")
+
+
 # SendState 合法转移白名单：key=(当前状态), value=set(可转到的目标状态)
 _LEGAL_TRANSITIONS: dict[SendState, set[SendState]] = {
     SendState.IDLE: {SendState.STARTING},
@@ -300,6 +303,28 @@ class SendLoopManager:
             elif target == SendState.STOPPING:
                 self._stop_event.set()
             return TransitionResult(ok=True)
+
+    def run_cleanup_atomically(
+        self, callback: Callable[[], T]
+    ) -> tuple[TransitionResult, T | None]:
+        """仅在空闲或已停止时原子执行清理回调。
+
+        使用现有可重入状态锁覆盖最终状态确认与整个回调，避免清理期间
+        其他线程将发送循环切换至 STARTING。状态不安全时返回可区分的失败结果。
+
+        Args:
+            callback: 需要在清理保护区内执行的同步清理回调。
+
+        Returns:
+            (结果, 回调返回值)；状态不安全时回调返回值为 None。
+        """
+        with self._state_lock:
+            if self._state not in (SendState.IDLE, SendState.STOPPED):
+                return TransitionResult(
+                    ok=False,
+                    reason=f"Cleanup blocked by state: {self._state.value}",
+                ), None
+            return TransitionResult(ok=True), callback()
 
     def increment_count(
         self, group: str, persisted_count: int | None = None

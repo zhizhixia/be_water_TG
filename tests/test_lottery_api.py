@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 
 from src.lottery_store import LotteryStore
 from web_app import app, manager
+from web_manager import SendState
 
 
 def _set_env(monkeypatch, db_path) -> None:
@@ -134,3 +136,48 @@ def test_lottery_sse_events_redact_sensitive_fields() -> None:
     event = list(manager.event_bus._history)[-1][1]
     assert event["type"] == "lottery_alert"
     assert event["data"] == {"id": 1, "summary": "待处理", "nested": {"message_id": 2}}
+
+
+def test_cleanup_blocks_start_transition_until_delete_finishes(monkeypatch, tmp_path) -> None:
+    """清理回调执行期间，其他线程不能将发送循环切换为 STARTING。"""
+    path = tmp_path / "state.db"
+    _set_env(monkeypatch, path)
+    cleanup_started = threading.Event()
+    start_finished = threading.Event()
+    start_result = []
+    worker = None
+
+    def cleanup_before(_store, cutoff: str) -> dict[str, int]:
+        nonlocal worker
+
+        def start_while_cleanup_runs() -> None:
+            start_result.append(manager.transition(SendState.STARTING))
+            start_finished.set()
+
+        worker = threading.Thread(target=start_while_cleanup_runs)
+        cleanup_started.set()
+        worker.start()
+        assert not start_finished.wait(0.2)
+        return {"lottery_entry": 1}
+
+    monkeypatch.setattr(LotteryStore, "cleanup_before", cleanup_before)
+    with manager._state_lock:
+        manager._state = SendState.IDLE
+    try:
+        response = app.test_client().post(
+            "/api/lotteries/cleanup",
+            json={"before": "2026-08-02", "confirm": "确认清理"},
+        )
+        assert cleanup_started.is_set()
+        assert response.status_code == 200
+        assert worker is not None
+        worker.join(timeout=1)
+        assert not worker.is_alive()
+        assert start_finished.is_set()
+        assert len(start_result) == 1
+        assert start_result[0].ok is True
+    finally:
+        if worker is not None:
+            worker.join(timeout=1)
+        with manager._state_lock:
+            manager._state = SendState.IDLE
