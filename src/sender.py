@@ -3,13 +3,25 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from enum import StrEnum
 
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError
 
 from src.config import Settings
+from src.group_identity import GroupIdentity
+from src.lottery_models import ButtonSnapshot, MessageSnapshot
 
 logger = logging.getLogger(__name__)
+
+
+class PublisherTrust(StrEnum):
+    """由 Telegram 当前群实体校验产生的发布者可信级别。"""
+
+    OWNER = "owner"
+    ADMIN = "admin"
+    BOT = "bot"
+    UNKNOWN = "unknown"
 
 
 class TelegramSender:
@@ -123,6 +135,152 @@ class TelegramSender:
             logger.warning("客户端未连接，无法获取消息")
             return []
         return await self._client.get_messages(entity, limit=limit)
+
+    async def resolve_group_identity(self, ref: str) -> GroupIdentity:
+        """解析授权入口为稳定 peer_id；未连接或解析失败均拒绝启动。"""
+        if self._client is None:
+            raise RuntimeError("Telegram client is not connected")
+        entity = await self._client.get_entity(ref)
+        peer_id = int(getattr(entity, "id"))
+        username = getattr(entity, "username", None)
+        title = getattr(entity, "title", None) or getattr(entity, "first_name", None) or ref
+        link = f"https://t.me/{username}" if username else None
+        return GroupIdentity(peer_id, ref, str(title), username, link)
+
+    async def get_latest_message_id(self, peer_id: int) -> int | None:
+        messages = await self.get_messages_after(peer_id, 0, 1, None)
+        return messages[-1].message_id if messages else None
+
+    @staticmethod
+    def _snapshot(peer_id: int, message: object, source: str = "incremental") -> MessageSnapshot:
+        """将易变 Telethon 消息映射为不可变、无裸实体的快照。"""
+        rows = getattr(message, "buttons", None) or getattr(message, "reply_markup", None)
+        buttons: list[tuple[ButtonSnapshot, ...]] = []
+        for row in getattr(rows, "rows", []) if rows else []:
+            snapshot_row = []
+            for button in getattr(row, "buttons", []):
+                if getattr(button, "webview", None) is not None:
+                    kind, data = "web_app", None
+                elif hasattr(button, "data") and getattr(button, "data") is not None:
+                    kind, data = "callback", bytes(button.data)
+                elif getattr(button, "login_url", None) is not None:
+                    kind, data = "login", None
+                elif getattr(button, "invoice", False):
+                    kind, data = "payment", None
+                elif hasattr(button, "url"):
+                    kind, data = "url", None
+                else:
+                    kind, data = "unknown", None
+                snapshot_row.append(ButtonSnapshot(str(getattr(button, "text", "")), kind, data))
+            buttons.append(tuple(snapshot_row))
+        date = getattr(message, "date", None)
+        return MessageSnapshot(
+            peer_id=peer_id,
+            message_id=int(message.id),
+            text=str(getattr(message, "message", "") or ""),
+            buttons=tuple(buttons),
+            occurred_at=date.isoformat() if date else None,
+            is_reply=bool(getattr(message, "reply_to", None)),
+            sender_id=getattr(message, "sender_id", None),
+            pinned=bool(getattr(message, "pinned", False)),
+            source=source,
+        )
+
+    async def get_messages_after(self, peer_id: int, message_id: int, limit: int = 500, min_occurred_at=None) -> list[MessageSnapshot]:
+        if self._client is None:
+            raise RuntimeError("Telegram client is not connected")
+        messages = await self._client.get_messages(peer_id, min_id=message_id, limit=min(limit, 500))
+        result = [self._snapshot(peer_id, item) for item in reversed(messages) if item]
+        return [item for item in result if min_occurred_at is None or (item.occurred_at and item.occurred_at >= min_occurred_at.isoformat())]
+
+    async def get_message(self, peer_id: int, message_id: int) -> MessageSnapshot | None:
+        """读取单条当前消息；已删除消息返回 None。"""
+        if self._client is None:
+            raise RuntimeError("Telegram client is not connected")
+        message = await self._client.get_messages(peer_id, ids=message_id)
+        return self._snapshot(peer_id, message) if message else None
+
+    async def get_current_pinned_messages(self, peer_id: int) -> tuple[list[MessageSnapshot], bool]:
+        """读取当前置顶；不支持完整枚举时仅返回最新置顶并标记降级。"""
+        if self._client is None:
+            raise RuntimeError("Telegram client is not connected")
+        try:
+            result = await self._client.get_messages(peer_id, limit=100, pinned=True)
+        except (AttributeError, TypeError):
+            latest = await self._client.get_messages(peer_id, limit=1)
+            values = [latest] if latest and not isinstance(latest, list) else (latest or [])
+            return [self._snapshot(peer_id, item, "pinned") for item in values if item and getattr(item, "pinned", False)], False
+        values = result if isinstance(result, list) else [result]
+        return [self._snapshot(peer_id, item, "pinned") for item in values if item and getattr(item, "pinned", False)], True
+
+    async def get_publisher_trust(self, peer_id: int, sender_id: int | None) -> PublisherTrust:
+        """按当前群成员实体验证 owner/admin/bot，任意权限异常均保守未知。"""
+        if self._client is None or sender_id is None:
+            return PublisherTrust.UNKNOWN
+        try:
+            permissions = await self._client.get_permissions(peer_id, sender_id)
+            participant = getattr(permissions, "participant", permissions)
+            if bool(getattr(participant, "creator", False) or getattr(participant, "is_creator", False)):
+                return PublisherTrust.OWNER
+            if bool(getattr(permissions, "is_admin", False) or getattr(participant, "admin_rights", None)):
+                return PublisherTrust.ADMIN
+            entity = await self._client.get_entity(sender_id)
+            if bool(getattr(entity, "bot", False)):
+                return PublisherTrust.BOT
+        except Exception:
+            logger.warning("无法校验发布者权限，按未知发布者处理", exc_info=True)
+        return PublisherTrust.UNKNOWN
+
+    async def click_callback(self, peer_id: int, message_id: int, row: int | None, column: int | None) -> str:
+        if self._client is None or row is None or column is None:
+            raise RuntimeError("Invalid callback action")
+        message = await self._client.get_messages(peer_id, ids=message_id)
+        return str(await message.click(row, column))
+
+    async def send_group_text(self, peer_id: int, text: str) -> int:
+        if self._client is None:
+            raise RuntimeError("Telegram client is not connected")
+        return int((await self._client.send_message(peer_id, text)).id)
+
+    async def reply_to_message(self, peer_id: int, message_id: int, text: str) -> int:
+        if self._client is None:
+            raise RuntimeError("Telegram client is not connected")
+        return int((await self._client.send_message(peer_id, text, reply_to=message_id)).id)
+
+    async def find_own_matching_top_level_text(self, peer_id: int, text: str, after_message_id: int) -> MessageSnapshot | None:
+        """查询本人在原消息之后的相同顶层文本，供幂等确认使用。"""
+        if self._client is None:
+            raise RuntimeError("Telegram client is not connected")
+        me = await self._client.get_me()
+        messages = await self.get_messages_after(peer_id, after_message_id, 500, None)
+        for snapshot in messages:
+            if snapshot.sender_id == getattr(me, "id", None) and not snapshot.is_reply and snapshot.text == text:
+                return snapshot
+        return None
+
+    async def find_own_matching_reply(self, peer_id: int, message_id: int, text: str) -> MessageSnapshot | None:
+        """查询本人对指定原消息的相同回复，供幂等确认使用。"""
+        if self._client is None:
+            raise RuntimeError("Telegram client is not connected")
+        me = await self._client.get_me()
+        replies = await self._client.get_messages(peer_id, reply_to=message_id, limit=500)
+        for raw in replies or []:
+            snapshot = self._snapshot(peer_id, raw)
+            if snapshot.sender_id == getattr(me, "id", None) and snapshot.text == text:
+                return snapshot
+        return None
+
+    def build_group_link(self, identity: GroupIdentity) -> str | None:
+        """构建公开群链接；私有群无链接时返回 None。"""
+        return identity.display_link
+
+    def build_message_link(self, identity: GroupIdentity, message_id: int) -> str | None:
+        """构建公开深链，私有频道退化为 t.me/c，其他私有群返回 None。"""
+        if identity.display_link:
+            return f"{identity.display_link}/{message_id}"
+        if identity.peer_id > 0:
+            return f"https://t.me/c/{identity.peer_id}/{message_id}"
+        return None
 
     async def is_group_admin(self, entity: str, user_id: int) -> bool:
         """Return whether a message sender currently has admin rights in a group."""
