@@ -50,6 +50,7 @@ class AppServer:
         """创建 Waitress 监听器并在后台运行；失败时不留下服务资源。"""
         if self._server is not None:
             return
+        self._run_error = None
         log_handler = self._app.extensions.get("log_queue_handler")
         root_logger = logging.getLogger()
         if log_handler is not None and log_handler not in root_logger.handlers:
@@ -61,14 +62,25 @@ class AppServer:
 
                 factory = create_server
             self._server = factory(self._app, host="127.0.0.1", port=self._requested_port)
+            thread = threading.Thread(
+                target=self._run,
+                name="bewatertg-waitress",
+                daemon=True,
+            )
+            thread.start()
+            self._thread = thread
         except OSError as exc:
-            self.stop()
+            try:
+                self.stop()
+            except Exception:
+                logging.getLogger(__name__).exception("本地服务启动失败后的清理失败")
             raise AppServerStartupError("本地服务端口被占用或不可用") from exc
         except Exception:
-            self.stop()
+            try:
+                self.stop()
+            except Exception:
+                logging.getLogger(__name__).exception("本地服务启动失败后的清理失败")
             raise
-        self._thread = threading.Thread(target=self._run, name="bewatertg-waitress", daemon=True)
-        self._thread.start()
 
     def wait(self) -> None:
         """等待 Waitress 服务线程结束，并传播服务异常。"""
@@ -83,11 +95,17 @@ class AppServer:
         if log_handler is not None:
             logging.getLogger().removeHandler(log_handler)
         server, self._server = self._server, None
-        if server is not None:
-            server.close()
-        if self._thread is not None and self._thread is not threading.current_thread():
-            self._thread.join(timeout=5)
-        self._thread = None
+        thread, self._thread = self._thread, None
+        try:
+            if server is not None:
+                server.close()
+        finally:
+            if (
+                thread is not None
+                and thread is not threading.current_thread()
+                and thread.is_alive()
+            ):
+                thread.join(timeout=5)
 
     def _install_health_route(self) -> None:
         if "be_water_health" in self._app.view_functions:

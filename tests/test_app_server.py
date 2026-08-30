@@ -196,6 +196,285 @@ def test_server_factory_failure_removes_log_handler(
         root_logger.removeHandler(handler)
 
 
+def test_thread_construction_failure_cleans_server_and_handler(monkeypatch) -> None:
+    """线程构造失败时关闭监听器、移除 handler，且后续停止保持幂等。"""
+    root_logger = logging.getLogger()
+    baseline_handlers = list(root_logger.handlers)
+    app, _event_bus = _app_with_log_handler("thread-construction-failure")
+    handler = app.extensions["log_queue_handler"]
+    waitress_server = FakeWaitressServer()
+
+    def failing_thread(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("thread construction failed")
+
+    monkeypatch.setattr("src.app_server.threading.Thread", failing_thread)
+    server = AppServer(app, server_factory=lambda _app, **_: waitress_server)
+    try:
+        with pytest.raises(RuntimeError, match="thread construction failed"):
+            server.start()
+
+        assert waitress_server.closed
+        assert root_logger.handlers == baseline_handlers
+        assert server._server is None
+        assert server._thread is None
+        server.stop()
+        assert root_logger.handlers == baseline_handlers
+    finally:
+        root_logger.removeHandler(handler)
+
+
+def test_thread_start_failure_cleans_without_joining_unstarted_thread(monkeypatch) -> None:
+    """线程启动失败时清理服务和 handler，但不得 join 尚未启动的线程。"""
+    root_logger = logging.getLogger()
+    baseline_handlers = list(root_logger.handlers)
+    app, _event_bus = _app_with_log_handler("thread-start-failure")
+    handler = app.extensions["log_queue_handler"]
+    waitress_server = FakeWaitressServer()
+    join_calls: list[str] = []
+
+    class FailingStartThread:
+        def __init__(self, **_kwargs: object) -> None:
+            return None
+
+        def start(self) -> None:
+            raise RuntimeError("thread start failed")
+
+        def join(self, **_kwargs: object) -> None:
+            join_calls.append("join")
+            raise AssertionError("未启动线程不得 join")
+
+    monkeypatch.setattr("src.app_server.threading.Thread", FailingStartThread)
+    server = AppServer(app, server_factory=lambda _app, **_: waitress_server)
+    try:
+        with pytest.raises(RuntimeError, match="thread start failed"):
+            server.start()
+
+        assert waitress_server.closed
+        assert root_logger.handlers == baseline_handlers
+        assert server._server is None
+        assert server._thread is None
+        assert join_calls == []
+        server.stop()
+        assert join_calls == []
+    finally:
+        root_logger.removeHandler(handler)
+
+
+@pytest.mark.parametrize(
+    ("thread_failure", "expected_exception"),
+    [
+        (OSError("thread resource unavailable"), AppServerStartupError),
+        (RuntimeError("thread construction failed"), RuntimeError),
+    ],
+)
+def test_start_cleanup_failure_preserves_original_start_exception(
+    monkeypatch,
+    thread_failure,
+    expected_exception,
+) -> None:
+    """启动失败后的 close 异常不得覆盖原启动异常或其 OSError 包装。"""
+    class FailingCloseServer(FakeWaitressServer):
+        def close(self) -> None:
+            self.closed = True
+            raise RuntimeError("close failed")
+
+    waitress_server = FailingCloseServer()
+
+    def failing_thread(*_args: object, **_kwargs: object) -> None:
+        raise thread_failure
+
+    monkeypatch.setattr("src.app_server.threading.Thread", failing_thread)
+    server = AppServer(
+        Flask(__name__),
+        server_factory=lambda _app, **_: waitress_server,
+    )
+
+    with pytest.raises(expected_exception) as captured:
+        server.start()
+
+    if expected_exception is RuntimeError:
+        assert str(captured.value) == "thread construction failed"
+    assert waitress_server.closed
+    assert server._server is None
+    assert server._thread is None
+
+
+def test_restart_clears_previous_run_error() -> None:
+    """首轮运行异常不得在停止并正常重启后再次由 wait 传播。"""
+    class FailingRunServer(FakeWaitressServer):
+        def run(self) -> None:
+            raise RuntimeError("first run failed")
+
+    waitress_servers = [FailingRunServer(), FakeWaitressServer()]
+    server = AppServer(
+        Flask(__name__),
+        server_factory=lambda _app, **_: waitress_servers.pop(0),
+    )
+
+    server.start()
+    with pytest.raises(RuntimeError, match="first run failed"):
+        server.wait()
+    server.stop()
+
+    server.start()
+    server.wait()
+    server.stop()
+
+
+def test_stop_close_failure_still_clears_thread_and_handler() -> None:
+    """监听器关闭失败时仍尽最大努力清理线程状态和日志 handler。"""
+    class FailingCloseServer(FakeWaitressServer):
+        def close(self) -> None:
+            self.closed = True
+            raise RuntimeError("close failed")
+
+    root_logger = logging.getLogger()
+    baseline_handlers = list(root_logger.handlers)
+    app, _event_bus = _app_with_log_handler("stop-close-failure")
+    handler = app.extensions["log_queue_handler"]
+    waitress_server = FailingCloseServer()
+    server = AppServer(app, server_factory=lambda _app, **_: waitress_server)
+    try:
+        server.start()
+        with pytest.raises(RuntimeError, match="close failed"):
+            server.stop()
+
+        assert waitress_server.closed
+        assert root_logger.handlers == baseline_handlers
+        assert server._server is None
+        assert server._thread is None
+    finally:
+        root_logger.removeHandler(handler)
+
+
+def test_server_stop_failure_does_not_block_instance_release(monkeypatch, tmp_path) -> None:
+    """服务清理异常不得覆盖固定退出码或阻止释放实例锁。"""
+    events: list[str] = []
+
+    class Paths:
+        resource_dir = tmp_path / "resources"
+        logs_dir = tmp_path / "logs"
+
+        def ensure_directories(self) -> None:
+            self.logs_dir.mkdir(parents=True, exist_ok=True)
+
+    class Instance:
+        def acquire(self) -> bool:
+            events.append("acquire")
+            return True
+
+        def release(self) -> None:
+            events.append("release")
+
+    class Server:
+        port = 5000
+
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            return None
+
+        def start(self) -> None:
+            raise RuntimeError("start failed")
+
+        def stop(self) -> None:
+            events.append("stop")
+            raise RuntimeError("close failed")
+
+    migration_result = type(
+        "MigrationResult",
+        (),
+        {"status": "migration_failed", "migrated": (), "skipped": ()},
+    )()
+    monkeypatch.setattr(main, "setup_root_logger", lambda _paths: None)
+
+    result = main.run_application(
+        paths_factory=Paths,
+        migration_function=lambda _legacy, _paths: migration_result,
+        instance_factory=lambda **_kwargs: Instance(),
+        app_factory=lambda **_kwargs: object(),
+        server_factory=Server,
+    )
+
+    assert result == 1
+    assert events == ["acquire", "stop", "release"]
+
+
+@pytest.mark.parametrize("failure_stage", ["construction", "start"])
+def test_run_application_thread_failure_releases_lock_and_restores_handler(
+    monkeypatch,
+    tmp_path,
+    failure_stage,
+) -> None:
+    """线程构造或启动失败均应返回 1、释放实例锁并恢复根日志 handler。"""
+    events: list[str] = []
+    root_logger = logging.getLogger()
+    baseline_handlers = list(root_logger.handlers)
+    app, _event_bus = _app_with_log_handler(f"main-{failure_stage}-failure")
+    handler = app.extensions["log_queue_handler"]
+    waitress_server = FakeWaitressServer()
+
+    class Paths:
+        resource_dir = tmp_path / "resources"
+        logs_dir = tmp_path / "logs"
+
+        def ensure_directories(self) -> None:
+            self.logs_dir.mkdir(parents=True, exist_ok=True)
+
+    class Instance:
+        def acquire(self) -> bool:
+            events.append("acquire")
+            return True
+
+        def release(self) -> None:
+            events.append("release")
+
+    class FailingStartThread:
+        def __init__(self, **_kwargs: object) -> None:
+            return None
+
+        def start(self) -> None:
+            raise RuntimeError("thread start failed")
+
+    def failing_thread_construction(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("thread construction failed")
+
+    thread_factory = (
+        failing_thread_construction
+        if failure_stage == "construction"
+        else FailingStartThread
+    )
+    monkeypatch.setattr("src.app_server.threading.Thread", thread_factory)
+    monkeypatch.setattr(main, "setup_root_logger", lambda _paths: None)
+    migration_result = type(
+        "MigrationResult",
+        (),
+        {"status": "migration_failed", "migrated": (), "skipped": ()},
+    )()
+
+    def create_server(flask_app: Flask, **kwargs: object) -> AppServer:
+        return AppServer(
+            flask_app,
+            port=int(kwargs["port"]),
+            runtime_state=kwargs["runtime_state"],
+            server_factory=lambda _app, **_: waitress_server,
+        )
+
+    try:
+        result = main.run_application(
+            paths_factory=Paths,
+            migration_function=lambda _legacy, _paths: migration_result,
+            instance_factory=lambda **_kwargs: Instance(),
+            app_factory=lambda **_kwargs: app,
+            server_factory=create_server,
+        )
+
+        assert result == 1
+        assert events == ["acquire", "release"]
+        assert waitress_server.closed
+        assert root_logger.handlers == baseline_handlers
+    finally:
+        root_logger.removeHandler(handler)
+
+
 def test_main_exits_when_existing_local_service_owns_instance(monkeypatch) -> None:
     """入口识别到既有 BeWaterTG 后不创建第二个服务或运行数据。"""
     class Instance:

@@ -101,9 +101,14 @@ def run_application(
         logger.exception("运行目录初始化或旧数据迁移失败，应用安全退出")
         return 1
     finally:
-        if server is not None:
-            server.stop()
-        instance.release()
+        try:
+            if server is not None:
+                try:
+                    server.stop()
+                except Exception:
+                    logger.exception("本地服务清理失败")
+        finally:
+            instance.release()
 
 
 if __name__ == "__main__":
