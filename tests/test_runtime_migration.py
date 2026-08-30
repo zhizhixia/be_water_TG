@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 import os
 import sqlite3
 from pathlib import Path
@@ -20,6 +21,279 @@ def _create_wal_database(database: Path) -> sqlite3.Connection:
     connection.commit()
     assert database.with_name(f"{database.name}-wal").exists()
     return connection
+
+
+def _write_custom_legacy_env(legacy: Path, custom_database: Path) -> Path:
+    """写入只用于测试的非默认旧数据库配置。"""
+    legacy.mkdir()
+    source = legacy / ".env"
+    source.write_text(
+        "\n".join(
+            [
+                "API_ID=12345",
+                "API_HASH=marker-secret",
+                f"STATE_DB_PATH={custom_database}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return source
+
+
+def test_custom_database_path_creates_non_sensitive_pending_without_opening_source(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    """首次自定义数据库阻断不读取旧库、不迁移配置，也不创建固定目标。"""
+    from src import runtime_migration
+
+    legacy = tmp_path / "legacy"
+    custom_database = tmp_path / "private" / "custom.db"
+    custom_database.parent.mkdir()
+    custom_database.write_bytes(b"must-not-be-opened")
+    source = _write_custom_legacy_env(legacy, custom_database)
+    original_open = runtime_migration._open_regular_source
+    opened: list[Path] = []
+
+    def record_safe_open(candidate: Path) -> int | None:
+        opened.append(candidate)
+        return original_open(candidate)
+
+    monkeypatch.setattr(runtime_migration, "_open_regular_source", record_safe_open)
+    paths = RuntimePaths.from_environment(tmp_path / "appdata", tmp_path / "resources")
+
+    result = migrate_legacy_runtime_data(legacy, paths)
+
+    assert result.status == "custom_database_requires_manual_copy"
+    assert result.migrated == ()
+    assert custom_database not in opened
+    assert source.exists()
+    assert not paths.env_path.exists()
+    assert not paths.state_db_path.exists()
+    marker_text = (paths.backups_dir / "migration-state.json").read_text(encoding="utf-8")
+    marker = json.loads(marker_text)
+    assert marker == {
+        "schema": 1,
+        "status": "custom_database_requires_manual_copy",
+        "source_config_digest": marker["source_config_digest"],
+    }
+    assert len(marker["source_config_digest"]) == 64
+    assert str(custom_database) not in marker_text
+    assert "marker-secret" not in marker_text
+    assert str(custom_database) not in caplog.text
+    assert "marker-secret" not in caplog.text
+
+
+def test_custom_database_path_with_existing_fixed_target_records_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """首次发现时固定目标已存在必须永久进入目标冲突，而非恢复成功。"""
+    from src import runtime_migration
+
+    legacy = tmp_path / "legacy"
+    custom_database = tmp_path / "private" / "custom.db"
+    custom_database.parent.mkdir()
+    custom_database.write_bytes(b"source-kept")
+    source = _write_custom_legacy_env(legacy, custom_database)
+    paths = RuntimePaths.from_environment(tmp_path / "appdata", tmp_path / "resources")
+    with sqlite3.connect(paths.state_db_path) as connection:
+        connection.execute("CREATE TABLE existing (value TEXT)")
+
+    first = migrate_legacy_runtime_data(legacy, paths)
+    marker_path = paths.backups_dir / "migration-state.json"
+    marker_before = marker_path.read_bytes()
+    original_open = runtime_migration._open_regular_source
+    opened: list[Path] = []
+
+    def record_safe_open(candidate: Path) -> int | None:
+        opened.append(candidate)
+        return original_open(candidate)
+
+    monkeypatch.setattr(runtime_migration, "_open_regular_source", record_safe_open)
+    second = migrate_legacy_runtime_data(legacy, paths)
+
+    assert first.status == "database_destination_conflict"
+    assert second.status == "database_destination_conflict"
+    assert custom_database not in opened
+    assert not paths.env_path.exists()
+    assert source.exists()
+    assert custom_database.read_bytes() == b"source-kept"
+    assert marker_path.read_bytes() == marker_before
+    marker = json.loads(marker_before.decode("utf-8"))
+    assert marker["status"] == "database_destination_conflict"
+
+
+def test_pending_custom_database_recovers_only_from_valid_fixed_database(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """pending 后仅验证离线放入的固定 SQLite，并规范化迁移配置。"""
+    from src import runtime_migration
+
+    legacy = tmp_path / "legacy"
+    custom_database = tmp_path / "private" / "custom.db"
+    custom_database.parent.mkdir()
+    with sqlite3.connect(custom_database) as connection:
+        connection.execute("CREATE TABLE source_data (value TEXT)")
+        connection.execute("INSERT INTO source_data VALUES ('source-kept')")
+    source = _write_custom_legacy_env(legacy, custom_database)
+    source_before = source.read_bytes()
+    paths = RuntimePaths.from_environment(tmp_path / "appdata", tmp_path / "resources")
+    assert migrate_legacy_runtime_data(legacy, paths).status == "custom_database_requires_manual_copy"
+    with sqlite3.connect(paths.state_db_path) as connection:
+        connection.execute("CREATE TABLE restored (value TEXT NOT NULL)")
+        connection.execute("INSERT INTO restored VALUES ('offline-copy')")
+
+    original_open = runtime_migration._open_regular_source
+    opened: list[Path] = []
+
+    def record_safe_open(candidate: Path) -> int | None:
+        opened.append(candidate)
+        return original_open(candidate)
+
+    monkeypatch.setattr(runtime_migration, "_open_regular_source", record_safe_open)
+    result = migrate_legacy_runtime_data(legacy, paths)
+    marker_path = paths.backups_dir / "migration-state.json"
+    marker_after_recovery = marker_path.read_bytes()
+    repeated = migrate_legacy_runtime_data(legacy, paths)
+
+    assert result.status == "ready"
+    assert result.migrated == ("env",)
+    assert repeated.status == "ready"
+    assert repeated.migrated == ()
+    assert marker_path.read_bytes() == marker_after_recovery
+    assert custom_database not in opened
+    assert source.read_bytes() == source_before
+    migrated_env = paths.env_path.read_text(encoding="utf-8")
+    assert f"STATE_DB_PATH={paths.state_db_path}\n" in migrated_env
+    assert str(custom_database) not in migrated_env
+    with sqlite3.connect(paths.state_db_path) as connection:
+        assert connection.execute("SELECT value FROM restored").fetchall() == [("offline-copy",)]
+
+
+def test_pending_custom_database_rejects_invalid_fixed_database(tmp_path: Path) -> None:
+    """pending 后固定目标即使有 SQLite header 但主体损坏也继续阻断。"""
+    legacy = tmp_path / "legacy"
+    custom_database = tmp_path / "private" / "custom.db"
+    custom_database.parent.mkdir()
+    custom_database.write_bytes(b"source-kept")
+    source = _write_custom_legacy_env(legacy, custom_database)
+    paths = RuntimePaths.from_environment(tmp_path / "appdata", tmp_path / "resources")
+    assert migrate_legacy_runtime_data(legacy, paths).status == "custom_database_requires_manual_copy"
+    paths.state_db_path.write_bytes(b"SQLite format 3\x00" + b"broken-body")
+
+    result = migrate_legacy_runtime_data(legacy, paths)
+
+    assert result.status == "manual_database_invalid"
+    assert result.migrated == ()
+    assert not paths.env_path.exists()
+    assert source.exists()
+    assert custom_database.read_bytes() == b"source-kept"
+
+
+def test_pending_recovery_requires_exact_single_quick_check_ok(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """只读 quick_check 返回额外行时必须 fail closed，不能迁移配置。"""
+    from src import runtime_migration
+
+    legacy = tmp_path / "legacy"
+    custom_database = tmp_path / "private" / "custom.db"
+    custom_database.parent.mkdir()
+    custom_database.write_bytes(b"source-kept")
+    _write_custom_legacy_env(legacy, custom_database)
+    paths = RuntimePaths.from_environment(tmp_path / "appdata", tmp_path / "resources")
+    assert migrate_legacy_runtime_data(legacy, paths).status == "custom_database_requires_manual_copy"
+    with sqlite3.connect(paths.state_db_path) as connection:
+        connection.execute("CREATE TABLE restored (value TEXT)")
+
+    original_connect = runtime_migration.sqlite3.connect
+    executed: list[str] = []
+
+    class ExtraQuickCheckRowConnection:
+        def __init__(self, connection: sqlite3.Connection) -> None:
+            self._connection = connection
+
+        def execute(self, statement: str):
+            executed.append(statement)
+            if statement == "PRAGMA quick_check":
+                return [("ok",), ("unexpected",)]
+            return self._connection.execute(statement)
+
+        def close(self) -> None:
+            self._connection.close()
+
+    def connect_with_extra_row(*args, **kwargs):
+        return ExtraQuickCheckRowConnection(original_connect(*args, **kwargs))
+
+    monkeypatch.setattr(runtime_migration.sqlite3, "connect", connect_with_extra_row)
+
+    result = migrate_legacy_runtime_data(legacy, paths)
+
+    assert "PRAGMA quick_check" in executed
+    assert result.status == "manual_database_invalid"
+    assert not paths.env_path.exists()
+
+
+def test_pending_custom_database_rejects_reparse_fixed_database(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """安全打开器将固定目标识别为重解析点时继续阻断。"""
+    from src import runtime_migration
+
+    legacy = tmp_path / "legacy"
+    custom_database = tmp_path / "private" / "custom.db"
+    custom_database.parent.mkdir()
+    custom_database.write_bytes(b"source-kept")
+    _write_custom_legacy_env(legacy, custom_database)
+    paths = RuntimePaths.from_environment(tmp_path / "appdata", tmp_path / "resources")
+    assert migrate_legacy_runtime_data(legacy, paths).status == "custom_database_requires_manual_copy"
+    with sqlite3.connect(paths.state_db_path) as connection:
+        connection.execute("CREATE TABLE restored (value TEXT)")
+    original_open = runtime_migration._open_regular_source
+    attempted: list[Path] = []
+
+    def reject_reparse_target(candidate: Path) -> int | None:
+        if candidate == paths.state_db_path:
+            attempted.append(candidate)
+            return None
+        return original_open(candidate)
+
+    monkeypatch.setattr(runtime_migration, "_open_regular_source", reject_reparse_target)
+
+    result = migrate_legacy_runtime_data(legacy, paths)
+
+    assert result.status == "manual_database_invalid"
+    assert not paths.env_path.exists()
+    assert attempted == [paths.state_db_path]
+
+
+def test_corrupted_pending_marker_fails_closed_without_migrating_env(tmp_path: Path) -> None:
+    """pending marker 损坏时，即使固定库有效也按固定失败码安全阻断。"""
+    legacy = tmp_path / "legacy"
+    custom_database = tmp_path / "private" / "custom.db"
+    custom_database.parent.mkdir()
+    custom_database.write_bytes(b"source-kept")
+    source = _write_custom_legacy_env(legacy, custom_database)
+    paths = RuntimePaths.from_environment(tmp_path / "appdata", tmp_path / "resources")
+    assert migrate_legacy_runtime_data(legacy, paths).status == "custom_database_requires_manual_copy"
+    marker_path = paths.backups_dir / "migration-state.json"
+    marker_path.write_text("{broken", encoding="utf-8")
+    with sqlite3.connect(paths.state_db_path) as connection:
+        connection.execute("CREATE TABLE restored (value TEXT)")
+
+    result = migrate_legacy_runtime_data(legacy, paths)
+
+    assert result.status == "migration_failed"
+    assert result.migrated == ()
+    assert not paths.env_path.exists()
+    assert source.exists()
+    assert custom_database.read_bytes() == b"source-kept"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="SQLite 迁移仅在 Windows 提供文件身份绑定保证")

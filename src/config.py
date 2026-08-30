@@ -326,7 +326,7 @@ def load_settings(runtime_paths: RuntimePaths | None = None) -> Settings:
     discussion_reply_pct = int(os.getenv("DISCUSSION_REPLY_PCT", "15"))
     reply_delay_min = int(os.getenv("REPLY_DELAY_MIN", "20"))
     reply_delay_max = int(os.getenv("REPLY_DELAY_MAX", "90"))
-    state_db_path = os.getenv("STATE_DB_PATH", str(paths.state_db_path))
+    state_db_path = str(paths.state_db_path)
     lottery_enabled = os.getenv("LOTTERY_ENABLED", "true").lower() in ("true", "1", "yes")
     lottery_scan_interval_minutes = int(os.getenv("LOTTERY_SCAN_INTERVAL_MINUTES", "60"))
     daily_pinned_lottery_scan_enabled = os.getenv("DAILY_PINNED_LOTTERY_SCAN_ENABLED", "true").lower() in ("true", "1", "yes")
@@ -404,8 +404,9 @@ def save_settings(
         settings: Settings 实例。
         path: .env 文件路径，默认为项目根目录下的 .env。
     """
+    paths = runtime_paths or RuntimePaths.from_environment()
     if path is None:
-        path = str((runtime_paths or RuntimePaths.from_environment()).env_path)
+        path = str(paths.env_path)
 
     # 构建新值字典
     new_values: dict[str, str] = {}
@@ -449,7 +450,7 @@ def save_settings(
     new_values["DISCUSSION_REPLY_PCT"] = str(settings.discussion_reply_pct)
     new_values["REPLY_DELAY_MIN"] = str(settings.reply_delay_min)
     new_values["REPLY_DELAY_MAX"] = str(settings.reply_delay_max)
-    new_values["STATE_DB_PATH"] = settings.state_db_path
+    new_values["STATE_DB_PATH"] = str(paths.state_db_path)
     new_values["LOTTERY_ENABLED"] = str(settings.lottery_enabled).lower()
     new_values["LOTTERY_SCAN_INTERVAL_MINUTES"] = str(settings.lottery_scan_interval_minutes)
     new_values["DAILY_PINNED_LOTTERY_SCAN_ENABLED"] = str(settings.daily_pinned_lottery_scan_enabled).lower()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import json
 import logging
 import os
 import sqlite3
@@ -18,10 +19,19 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class MigrationResult:
-    """记录迁移的类别，不包含运行数据内容或凭据。"""
+    """记录迁移的类别与固定状态码，不包含运行数据内容或凭据。"""
 
     migrated: tuple[str, ...]
     skipped: tuple[str, ...]
+    status: str = "ready"
+
+
+_MIGRATION_MARKER_NAME = "migration-state.json"
+_PENDING_STATUS = "custom_database_requires_manual_copy"
+_CONFLICT_STATUS = "database_destination_conflict"
+_FAILED_STATUS = "migration_failed"
+_DEFAULT_LEGACY_STATE_PATH = "state/be_water.db"
+_MAX_ENV_BYTES = 1024 * 1024
 
 
 def _create_private_temporary(directory: Path, name: str) -> tuple[Path, int]:
@@ -318,40 +328,63 @@ def _copy_atomically(source: Path, destination: Path) -> bool:
     return committed and cleanup_succeeded
 
 
-def _rewrite_legacy_env_state_path(source: Path, destination: Path, paths: RuntimePaths) -> bool:
-    """迁移 .env，并将已知旧相对数据库路径改为新的绝对路径。"""
+def _normalized_env_text(
+    source: Path,
+    paths: RuntimePaths,
+    rewrite_custom_path: bool,
+) -> str | None:
+    """安全读取旧配置并生成数据库路径规范化后的文本。"""
     source_descriptor = _open_regular_source(source)
     if source_descriptor is None:
-        return False
-    legacy_value = "state/be_water.db"
+        return None
     try:
         with os.fdopen(source_descriptor, "r", encoding="utf-8", newline="") as input_file:
-            source_lines = input_file.readlines()
-        temporary, descriptor = _create_private_temporary(destination.parent, destination.name)
+            source_text = input_file.read(_MAX_ENV_BYTES + 1)
+        if len(source_text.encode("utf-8")) > _MAX_ENV_BYTES:
+            return None
     except (OSError, UnicodeError):
-        return False
+        return None
 
     output_lines: list[str] = []
     replaced = False
-    for line in source_lines:
+    for line in source_text.splitlines(keepends=True):
         line_ending = "\n" if line.endswith("\n") else ""
         content = line[:-1] if line_ending else line
         stripped = content.strip()
         if stripped and not stripped.startswith("#") and "=" in stripped:
             key, value = stripped.split("=", 1)
             normalized_value = value.strip().strip("\"'")
-            if key.strip() == "STATE_DB_PATH" and normalized_value == legacy_value:
+            if key.strip() == "STATE_DB_PATH" and (
+                rewrite_custom_path or normalized_value == _DEFAULT_LEGACY_STATE_PATH
+            ):
                 output_lines.append(f"STATE_DB_PATH={paths.state_db_path}{line_ending}")
                 replaced = True
                 continue
         output_lines.append(line)
+    if replaced and (not output_lines or not output_lines[-1].endswith("\n")):
+        output_lines.append("\n")
+    return "".join(output_lines)
+
+
+def _rewrite_legacy_env_state_path(
+    source: Path,
+    destination: Path,
+    paths: RuntimePaths,
+    rewrite_custom_path: bool = False,
+) -> bool:
+    """迁移 .env，并将旧数据库路径规范化为固定绝对路径。"""
+    output_text = _normalized_env_text(source, paths, rewrite_custom_path)
+    if output_text is None:
+        return False
+    try:
+        temporary, descriptor = _create_private_temporary(destination.parent, destination.name)
+    except OSError:
+        return False
 
     committed = False
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="", closefd=False) as output_file:
-            output_file.writelines(output_lines)
-            if replaced and (not output_lines or not output_lines[-1].endswith("\n")):
-                output_file.write("\n")
+            output_file.write(output_text)
             output_file.flush()
             os.fsync(output_file.fileno())
         committed = _commit_without_overwrite(temporary, destination)
@@ -360,6 +393,22 @@ def _rewrite_legacy_env_state_path(source: Path, destination: Path, paths: Runti
     finally:
         cleanup_succeeded = _remove_owned_temporary(temporary, descriptor)
     return committed and cleanup_succeeded
+
+
+def _env_matches_normalized_source(source: Path, destination: Path, paths: RuntimePaths) -> bool:
+    """确认已有目标配置精确等于当前源配置的固定路径规范化结果。"""
+    expected = _normalized_env_text(source, paths, rewrite_custom_path=True)
+    if expected is None:
+        return False
+    destination_descriptor = _open_regular_source(destination)
+    if destination_descriptor is None:
+        return False
+    try:
+        with os.fdopen(destination_descriptor, "r", encoding="utf-8", newline="") as input_file:
+            actual = input_file.read(_MAX_ENV_BYTES + 1)
+        return len(actual.encode("utf-8")) <= _MAX_ENV_BYTES and actual == expected
+    except (OSError, UnicodeError):
+        return False
 
 
 def _backup_sqlite_atomically(source: Path, destination: Path) -> bool:
@@ -420,6 +469,158 @@ def _backup_sqlite_atomically(source: Path, destination: Path) -> bool:
     return committed and cleanup_succeeded
 
 
+def _inspect_legacy_env(source: Path) -> tuple[bool, str] | None:
+    """安全读取旧配置并仅返回自定义路径标志与配置摘要。"""
+    descriptor = _open_regular_source(source)
+    if descriptor is None:
+        return None
+    try:
+        source_stat = os.fstat(descriptor)
+        with os.fdopen(descriptor, "rb") as input_file:
+            content = input_file.read(_MAX_ENV_BYTES + 1)
+        if len(content) > _MAX_ENV_BYTES:
+            return None
+        text = content.decode("utf-8")
+    except (OSError, UnicodeError):
+        return None
+
+    state_values: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        if key.strip() == "STATE_DB_PATH":
+            state_values.append(value.strip().strip("\"'"))
+    is_custom = any(value != _DEFAULT_LEGACY_STATE_PATH for value in state_values)
+    identity = f"{source_stat.st_dev}:{source_stat.st_ino}".encode("ascii")
+    return is_custom, hashlib.sha256(identity).hexdigest()
+
+
+def _write_initial_marker(paths: RuntimePaths, status: str, source_digest: str) -> bool:
+    """以无覆盖方式持久化不含路径或配置内容的首次迁移状态。"""
+    marker_path = paths.backups_dir / _MIGRATION_MARKER_NAME
+    payload = {
+        "schema": 1,
+        "status": status,
+        "source_config_digest": source_digest,
+    }
+    try:
+        temporary, descriptor = _create_private_temporary(marker_path.parent, marker_path.name)
+    except OSError:
+        return False
+    committed = False
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n", closefd=False) as output_file:
+            json.dump(payload, output_file, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+            output_file.write("\n")
+            output_file.flush()
+            os.fsync(output_file.fileno())
+        committed = _commit_without_overwrite(temporary, marker_path)
+    except (OSError, TypeError, ValueError):
+        return False
+    finally:
+        cleanup_succeeded = _remove_owned_temporary(temporary, descriptor)
+    return committed and cleanup_succeeded
+
+
+def _read_marker(paths: RuntimePaths, source_digest: str) -> str | None:
+    """校验迁移标记的完整固定结构和源配置身份摘要。"""
+    marker_path = paths.backups_dir / _MIGRATION_MARKER_NAME
+    descriptor = _open_regular_source(marker_path)
+    if descriptor is None:
+        return None
+    try:
+        with os.fdopen(descriptor, "rb") as input_file:
+            content = input_file.read(4097)
+        if len(content) > 4096:
+            return None
+        payload = json.loads(content.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or set(payload) != {
+        "schema",
+        "status",
+        "source_config_digest",
+    }:
+        return None
+    status = payload.get("status")
+    digest = payload.get("source_config_digest")
+    if payload.get("schema") != 1 or status not in {_PENDING_STATUS, _CONFLICT_STATUS}:
+        return None
+    if not isinstance(digest, str) or len(digest) != 64:
+        return None
+    try:
+        int(digest, 16)
+    except ValueError:
+        return None
+    if digest != source_digest:
+        return None
+    return status
+
+
+def _validate_fixed_sqlite(database: Path) -> bool:
+    """只读验证固定目标是普通非重解析 SQLite 主库且完整性正常。"""
+    descriptor = _open_regular_source(database)
+    if descriptor is None:
+        return False
+    try:
+        initial_stat = os.fstat(descriptor)
+        if os.read(descriptor, 16) != b"SQLite format 3\x00":
+            return False
+        database_uri = f"{database.absolute().as_uri()}?mode=ro"
+        with closing(sqlite3.connect(database_uri, uri=True)) as connection:
+            connection.execute("PRAGMA query_only=ON")
+            integrity = list(connection.execute("PRAGMA quick_check"))
+        final_stat = database.stat(follow_symlinks=False)
+        return (
+            stat.S_ISREG(final_stat.st_mode)
+            and (initial_stat.st_dev, initial_stat.st_ino) == (final_stat.st_dev, final_stat.st_ino)
+            and integrity == [("ok",)]
+        )
+    except (OSError, sqlite3.Error):
+        return False
+    finally:
+        os.close(descriptor)
+
+
+def _block_custom_database(
+    paths: RuntimePaths,
+    source: Path,
+    source_digest: str,
+) -> MigrationResult:
+    """首次发现自定义旧库时记录阻断，并仅从固定目标完成离线恢复。"""
+    marker_path = paths.backups_dir / _MIGRATION_MARKER_NAME
+    if marker_path.exists():
+        status = _read_marker(paths, source_digest)
+        if status is None:
+            return MigrationResult((), (), _FAILED_STATUS)
+        if status == _CONFLICT_STATUS:
+            return MigrationResult((), (), status)
+        if not paths.state_db_path.exists():
+            return MigrationResult((), (), status)
+        if not _validate_fixed_sqlite(paths.state_db_path):
+            return MigrationResult((), (), "manual_database_invalid")
+        if paths.env_path.exists():
+            if _env_matches_normalized_source(source, paths.env_path, paths):
+                return MigrationResult((), (), "ready")
+            return MigrationResult((), (), _FAILED_STATUS)
+        migrated = _rewrite_legacy_env_state_path(
+            source,
+            paths.env_path,
+            paths,
+            rewrite_custom_path=True,
+        )
+        if not migrated:
+            return MigrationResult((), (), _FAILED_STATUS)
+        return MigrationResult(("env",), (), "ready")
+    status = _CONFLICT_STATUS if paths.state_db_path.exists() else _PENDING_STATUS
+    if not _write_initial_marker(paths, status, source_digest):
+        return MigrationResult((), (), _FAILED_STATUS)
+    logger.info("旧运行数据迁移阻断：%s", status)
+    return MigrationResult((), (), status)
+
+
 def migrate_legacy_runtime_data(legacy_dir: Path | str, paths: RuntimePaths) -> MigrationResult:
     """保守且幂等地迁移已识别的旧运行数据，绝不删除或覆盖源数据。"""
     root = Path(legacy_dir)
@@ -431,6 +632,12 @@ def migrate_legacy_runtime_data(legacy_dir: Path | str, paths: RuntimePaths) -> 
     candidates: list[tuple[str, Path, Path]] = []
     env_file = root / ".env"
     if env_file.exists():
+        env_inspection = _inspect_legacy_env(env_file)
+        if env_inspection is None:
+            return MigrationResult((), (), _FAILED_STATUS)
+        is_custom_database, source_digest = env_inspection
+        if is_custom_database:
+            return _block_custom_database(paths, env_file, source_digest)
         candidates.append(("env", env_file, paths.env_path))
     state_dir = root / "state"
     database = state_dir / "be_water.db"
