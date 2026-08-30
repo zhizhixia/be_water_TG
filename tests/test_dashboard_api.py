@@ -4,10 +4,9 @@ import asyncio
 from unittest.mock import Mock
 
 from src.state_store import PauseKind, StateStore
-from web_app import app, manager
 
 
-def _set_env(monkeypatch, db_path) -> None:
+def _set_env(monkeypatch) -> None:
     monkeypatch.setattr("src.config.load_dotenv", lambda **kwargs: None)
     monkeypatch.setenv("API_ID", "1")
     monkeypatch.setenv("API_HASH", "x" * 32)
@@ -15,13 +14,11 @@ def _set_env(monkeypatch, db_path) -> None:
     monkeypatch.setenv("TARGET_GROUPS", "https://t.me/allowed")
     monkeypatch.setenv("MIN_INTERVAL", "10")
     monkeypatch.setenv("MAX_INTERVAL", "20")
-    monkeypatch.setenv("STATE_DB_PATH", str(db_path))
 
 
-def test_dashboard_reads_durable_group_state(monkeypatch, tmp_path) -> None:
-    path = tmp_path / "state.db"
-    _set_env(monkeypatch, path)
-    store = StateStore(path)
+def test_dashboard_reads_durable_group_state(monkeypatch, app, runtime_paths) -> None:
+    _set_env(monkeypatch)
+    store = StateStore(runtime_paths.state_db_path)
     store.increment_sent("https://t.me/allowed", 30)
     client = app.test_client()
 
@@ -31,10 +28,9 @@ def test_dashboard_reads_durable_group_state(monkeypatch, tmp_path) -> None:
     assert dashboard["groups"][0]["sent_count"] == 1
 
 
-def test_audit_and_manual_resume_work_before_loop_start(monkeypatch, tmp_path) -> None:
-    path = tmp_path / "state.db"
-    _set_env(monkeypatch, path)
-    store = StateStore(path)
+def test_audit_and_manual_resume_work_before_loop_start(monkeypatch, app, runtime_paths) -> None:
+    _set_env(monkeypatch)
+    store = StateStore(runtime_paths.state_db_path)
     store.pause_group("https://t.me/allowed", PauseKind.SAFETY, "complaint")
     client = app.test_client()
 
@@ -47,7 +43,7 @@ def test_audit_and_manual_resume_work_before_loop_start(monkeypatch, tmp_path) -
     assert response.get_json()["group"]["pause_kind"] == "none"
 
 
-def test_event_bus_structured_decision_event() -> None:
+def test_event_bus_structured_decision_event(manager) -> None:
     bus = manager.event_bus
     bus._history.clear()
     asyncio.run(bus.emit_decision("group", "skip", "probability"))
@@ -58,9 +54,9 @@ def test_event_bus_structured_decision_event() -> None:
     }
 
 
-def test_config_api_rejects_invalid_groups_before_persisting(monkeypatch, tmp_path) -> None:
-    _set_env(monkeypatch, tmp_path / "state.db")
-    monkeypatch.setattr("web_app.save_settings", lambda settings: None)
+def test_config_api_rejects_invalid_groups_before_persisting(monkeypatch, app) -> None:
+    _set_env(monkeypatch)
+    monkeypatch.setattr("web_app.save_settings", lambda settings, **kwargs: None)
     client = app.test_client()
     response = client.post(
         "/api/config",
@@ -77,8 +73,8 @@ def test_config_api_rejects_invalid_groups_before_persisting(monkeypatch, tmp_pa
     assert response.get_json()["field"] == "target_groups"
 
 
-def test_config_api_normalizes_message_file_group_keys(monkeypatch, tmp_path) -> None:
-    _set_env(monkeypatch, tmp_path / "state.db")
+def test_config_api_normalizes_message_file_group_keys(monkeypatch, app, runtime_paths) -> None:
+    _set_env(monkeypatch)
     saved = Mock()
     monkeypatch.setattr("web_app.save_settings", saved)
     client = app.test_client()
@@ -98,5 +94,6 @@ def test_config_api_normalizes_message_file_group_keys(monkeypatch, tmp_path) ->
 
     assert response.status_code == 200
     settings = saved.call_args.args[0]
+    assert saved.call_args.kwargs == {"runtime_paths": runtime_paths}
     assert settings.target_groups == ["https://t.me/allowed"]
     assert settings.message_files == {"https://t.me/allowed": "messages.txt"}

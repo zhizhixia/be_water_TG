@@ -10,6 +10,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from src.config import Settings
+from src.runtime_paths import RuntimePaths
+from src.runtime_state import ApplicationRuntimeState
 from tests.fakes import FakeClock, FakeLotteryAI, FakeRandom, FakeSleeper, FakeTelegramSender
 
 
@@ -20,6 +22,42 @@ def block_network(monkeypatch: pytest.MonkeyPatch) -> None:
         raise RuntimeError("network access is disabled in tests")
 
     monkeypatch.setattr(socket, "create_connection", denied)
+
+
+@pytest.fixture
+def runtime_paths(tmp_path) -> RuntimePaths:
+    """为每个 Web 测试提供独立且不读取真实环境的集中运行路径。"""
+    paths = RuntimePaths(tmp_path / "resources", tmp_path / "runtime")
+    paths.ensure_directories()
+    return paths
+
+
+@pytest.fixture
+def runtime_state() -> ApplicationRuntimeState:
+    """提供已迁移且已配置的默认非敏感应用运行态。"""
+    state = ApplicationRuntimeState()
+    state.update(
+        configured=True,
+        migration_status="ready",
+        setup_status="configured",
+    )
+    return state
+
+
+@pytest.fixture
+def app(runtime_paths, runtime_state):
+    """通过真实 Flask 工厂创建每测试隔离的应用。"""
+    from web_app import create_app
+
+    flask_app = create_app(runtime_paths=runtime_paths, runtime_state=runtime_state)
+    flask_app.config["TESTING"] = True
+    return flask_app
+
+
+@pytest.fixture
+def manager(app):
+    """返回当前测试 Flask 实例独占的发送管理器。"""
+    return app.extensions["send_loop_manager"]
 
 
 @pytest.fixture

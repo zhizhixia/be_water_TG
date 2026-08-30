@@ -6,7 +6,7 @@ import os
 import queue
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, render_template, request
+from flask import Blueprint, Flask, Response, current_app, jsonify, render_template, request
 
 from src.ai_client import AIClient
 from src.ai_sender import AISender
@@ -20,32 +20,46 @@ from src.config import (
 from src.group_parser import parse_group_links, validate_group_links
 from src.sender import TelegramSender
 from src.lottery_store import LotteryStore
+from src.runtime_paths import RuntimePaths
+from src.runtime_state import ApplicationRuntimeState
 from src.state_store import StateStore
 from ui.message_manager import MessageManager
 from web_manager import LogQueueHandler, SendLoopManager
 
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
+routes = Blueprint("web", __name__)
 
-# 全局发送管理器
-manager = SendLoopManager()
+
+def _runtime_paths() -> RuntimePaths:
+    """返回当前 Flask 实例绑定的集中运行路径。"""
+    return current_app.extensions["runtime_paths"]
+
+
+def _runtime_state() -> ApplicationRuntimeState:
+    """返回当前 Flask 实例绑定的非敏感运行状态。"""
+    return current_app.extensions["runtime_state"]
+
+
+def _manager() -> SendLoopManager:
+    """返回当前 Flask 实例独占的发送循环管理器。"""
+    return current_app.extensions["send_loop_manager"]
 
 
 # ===== 页面路由 =====
 
-@app.route("/")
+@routes.route("/")
 def index():
     return render_template("index.html")
 
 
 # ===== 配置 API =====
 
-@app.route("/api/config", methods=["GET"])
+@routes.route("/api/config", methods=["GET"])
 def api_config_get():
     """从 .env 加载配置并返回 JSON"""
     try:
-        settings = load_settings()
+        settings = load_settings(runtime_paths=_runtime_paths())
         return jsonify({
             "success": True,
             "config": {
@@ -95,7 +109,7 @@ def api_config_get():
         return jsonify({"success": False, "error": str(ex)}), 400
 
 
-@app.route("/api/config", methods=["POST"])
+@routes.route("/api/config", methods=["POST"])
 def api_config_save():
     """保存配置到 .env"""
     try:
@@ -117,7 +131,7 @@ def api_config_save():
             raise SettingsValidationError("target_groups", str(ex)) from ex
 
         try:
-            current = load_settings()
+            current = load_settings(runtime_paths=_runtime_paths())
         except Exception:
             current = None
         raw_message_files = data.get("message_files", {})
@@ -170,7 +184,7 @@ def api_config_save():
             state_db_path=(current.state_db_path if current else "state/be_water.db"),
         )
         validate_settings_for_save(settings)
-        save_settings(settings)
+        save_settings(settings, runtime_paths=_runtime_paths())
         return jsonify({"success": True})
     except SettingsValidationError as ex:
         return jsonify({"success": False, "error": str(ex), "field": ex.field}), 422
@@ -180,11 +194,20 @@ def api_config_save():
 
 # ===== 控制 API =====
 
-@app.route("/api/start", methods=["POST"])
+@routes.route("/api/start", methods=["POST"])
 def api_start():
-    """启动发送循环。先校验群组链接，再经 manager.start 进入 STARTING。"""
+    """启动发送循环。先校验群组链接，再经 _manager().start 进入 STARTING。"""
+    runtime_snapshot = _runtime_state().snapshot()
+    if (
+        runtime_snapshot["migration_status"] != "ready"
+        or not runtime_snapshot["configured"]
+    ):
+        return jsonify({
+            "success": False,
+            "error": "应用尚未完成运行数据迁移或配置",
+        }), 409
     try:
-        settings = load_settings()
+        settings = load_settings(runtime_paths=_runtime_paths())
     except ValueError as ex:
         # load_settings 在 target_groups 为空时抛 ValueError，视为校验失败 → 422
         return jsonify({"success": False, "detail": str(ex)}), 422
@@ -215,7 +238,7 @@ def api_start():
     except Exception as ex:
         return jsonify({"success": False, "error": f"加载消息文件失败: {ex}"}), 400
 
-    sender = TelegramSender(settings)
+    sender = TelegramSender(settings, runtime_paths=_runtime_paths())
 
     ai_sender = None
     if settings.ai_enabled and settings.ai_api_key:
@@ -229,44 +252,44 @@ def api_start():
         )
         ai_sender = AISender(sender, ai_client)
 
-    result = manager.start(sender, settings, message_manager, ai_sender)
+    result = _manager().start(sender, settings, message_manager, ai_sender)
     if not result.ok:
         return jsonify({"success": False, "error": result.reason}), 409
     return jsonify({"success": True})
 
 
-@app.route("/api/pause", methods=["POST"])
+@routes.route("/api/pause", methods=["POST"])
 def api_pause():
-    result = manager.pause()
+    result = _manager().pause()
     if not result.ok:
         return jsonify({"success": False, "error": result.reason}), 409
     return jsonify({"success": True})
 
 
-@app.route("/api/resume", methods=["POST"])
+@routes.route("/api/resume", methods=["POST"])
 def api_resume():
-    result = manager.resume()
+    result = _manager().resume()
     if not result.ok:
         return jsonify({"success": False, "error": result.reason}), 409
     return jsonify({"success": True})
 
 
-@app.route("/api/stop", methods=["POST"])
+@routes.route("/api/stop", methods=["POST"])
 def api_stop():
-    result = manager.stop()
+    result = _manager().stop()
     if not result.ok:
         return jsonify({"success": False, "error": result.reason}), 409
     return jsonify({"success": True})
 
 
-@app.route("/api/dashboard")
+@routes.route("/api/dashboard")
 def api_dashboard():
     """Return a durable runtime snapshot for the overview page."""
-    snapshot = manager.dashboard_snapshot()
+    snapshot = _manager().dashboard_snapshot()
     if not snapshot["groups"]:
         try:
-            settings = load_settings()
-            store = StateStore(settings.state_db_path)
+            settings = load_settings(runtime_paths=_runtime_paths())
+            store = StateStore(_runtime_paths().state_db_path)
             groups = [
                 StateStore.serialize_state(item)
                 for item in store.list_group_states(settings.target_groups)
@@ -280,8 +303,7 @@ def api_dashboard():
         except Exception as ex:
             return jsonify({"success": False, "error": str(ex)}), 400
     try:
-        settings = load_settings()
-        alerts, total = LotteryStore(settings.state_db_path).list_alerts(limit=50, offset=0)
+        alerts, total = LotteryStore(_runtime_paths().state_db_path).list_alerts(limit=50, offset=0)
         snapshot["lottery_alerts"] = [_lottery_alert_payload(item) for item in alerts]
         snapshot["lottery_alert_total"] = total
     except Exception:
@@ -306,7 +328,7 @@ def _lottery_open_url(peer_id: int, message_id: int) -> tuple[str, bool]:
     return f"https://t.me/c/{peer_id}/{message_id}", True
 
 
-@app.route("/api/lotteries", methods=["GET"])
+@routes.route("/api/lotteries", methods=["GET"])
 def api_lottery_list():
     """分页读取待处理抽奖提醒，不改变提醒状态或冻结状态。"""
     try:
@@ -315,19 +337,18 @@ def api_lottery_list():
     except ValueError:
         return jsonify({"success": False, "error": "分页参数必须是整数"}), 400
     try:
-        settings = load_settings()
-        alerts, total = LotteryStore(settings.state_db_path).list_alerts(limit=limit, offset=offset)
+        alerts, total = LotteryStore(_runtime_paths().state_db_path).list_alerts(limit=limit, offset=offset)
         items = [_lottery_alert_payload(item) for item in alerts]
         return jsonify({"success": True, "alerts": items, "items": items, "total": total, "offset": offset, "limit": limit})
     except Exception as ex:
         return jsonify({"success": False, "alerts": [], "items": [], "total": 0, "offset": offset, "limit": limit, "error": str(ex)}), 400
 
 
-@app.route("/api/lotteries/<int:lottery_id>/open", methods=["POST"])
+@routes.route("/api/lotteries/<int:lottery_id>/open", methods=["POST"])
 def api_lottery_open(lottery_id: int):
     """原子关闭抽奖提醒；未知结果时同时解除该群抽奖冻结。"""
     try:
-        item = LotteryStore(load_settings().state_db_path).open_alert(lottery_id)
+        item = LotteryStore(_runtime_paths().state_db_path).open_alert(lottery_id)
         if item is None:
             return jsonify({"success": False, "error": "未找到抽奖提醒"}), 404
         url, fallback = _lottery_open_url(item.peer_id, item.message_id)
@@ -336,7 +357,7 @@ def api_lottery_open(lottery_id: int):
         return jsonify({"success": False, "error": str(ex)}), 400
 
 
-@app.route("/api/lotteries/cleanup", methods=["POST"])
+@routes.route("/api/lotteries/cleanup", methods=["POST"])
 def api_lottery_cleanup():
     """仅在空闲或已停止状态、收到中文二次确认后清理历史。"""
     data = request.get_json(silent=True) or {}
@@ -350,8 +371,8 @@ def api_lottery_cleanup():
         return jsonify({"success": False, "error": "清理日期必须是 ISO 日期"}), 400
 
     try:
-        result, deleted = manager.run_cleanup_atomically(
-            lambda: LotteryStore(load_settings().state_db_path).cleanup_before(cutoff)
+        result, deleted = _manager().run_cleanup_atomically(
+            lambda: LotteryStore(_runtime_paths().state_db_path).cleanup_before(cutoff)
         )
         if not result.ok:
             return jsonify({"success": False, "error": "请先停止自动任务后再清理抽奖历史"}), 409
@@ -360,16 +381,15 @@ def api_lottery_cleanup():
         return jsonify({"success": False, "error": str(ex)}), 400
 
 
-@app.route("/api/audit")
+@routes.route("/api/audit")
 def api_audit():
     try:
         limit = int(request.args.get("limit", "100"))
     except ValueError:
         limit = 100
-    events = manager.audit_events(limit)
+    events = _manager().audit_events(limit)
     if not events:
         try:
-            settings = load_settings()
             events = [
                 {
                     "seq": event.seq,
@@ -379,26 +399,25 @@ def api_audit():
                     "reason": event.reason,
                     "metadata": event.metadata,
                 }
-                for event in StateStore(settings.state_db_path).list_audit(limit)
+                for event in StateStore(_runtime_paths().state_db_path).list_audit(limit)
             ]
         except Exception:
             events = []
     return jsonify({"success": True, "events": events})
 
 
-@app.route("/api/groups/resume", methods=["POST"])
+@routes.route("/api/groups/resume", methods=["POST"])
 def api_group_resume():
     data = request.get_json(silent=True) or {}
     group = str(data.get("group", "")).strip()
     if not group:
         return jsonify({"success": False, "error": "group is required"}), 400
     try:
-        state = manager.resume_group(group)
+        state = _manager().resume_group(group)
     except RuntimeError:
         try:
-            settings = load_settings()
             state = StateStore.serialize_state(
-                StateStore(settings.state_db_path).resume_group(group)
+                StateStore(_runtime_paths().state_db_path).resume_group(group)
             )
         except Exception as ex:
             return jsonify({"success": False, "error": str(ex)}), 409
@@ -409,7 +428,7 @@ def api_group_resume():
 
 # ===== SSE 端点 =====
 
-@app.route("/api/events")
+@routes.route("/api/events")
 def api_events():
     """SSE 端点：推送实时日志、状态、计数器。
 
@@ -425,8 +444,9 @@ def api_events():
     except (TypeError, ValueError):
         last_seq = 0
 
+    event_bus = _manager().event_bus
+
     def generate():
-        event_bus = manager.event_bus
         q = event_bus.subscribe(last_seq=last_seq)
         # 推送当前状态作为首条（用 id: 0 占位，避免与真实历史 seq 冲突）
         state = event_bus.get_current_state()
@@ -456,23 +476,36 @@ def api_events():
 
 # ===== 验证码 API =====
 
-@app.route("/api/code", methods=["POST"])
+@routes.route("/api/code", methods=["POST"])
 def api_code():
     """提交 Telegram 验证码。submit_code 在无 future 或已超时时返回 False → 409。"""
     data = request.get_json()
     if not data or not data.get("code"):
         return jsonify({"success": False, "error": "验证码不能为空"}), 400
-    if not manager.submit_code(str(data["code"]).strip()):
+    if not _manager().submit_code(str(data["code"]).strip()):
         return jsonify({"success": False, "error": "当前无验证码请求或已超时"}), 409
     return jsonify({"success": True})
 
 
 # ===== 应用初始化 =====
 
-def create_app() -> Flask:
-    """工厂函数，由 main.py 导入使用"""
-    # 注册 LogQueueHandler 到根 logger
+def create_app(
+    *,
+    runtime_paths: RuntimePaths,
+    runtime_state: ApplicationRuntimeState,
+    manager: SendLoopManager | None = None,
+) -> Flask:
+    """使用显式运行路径、状态和可选管理器创建隔离的 Flask 应用。"""
+    app = Flask(__name__)
+    app_manager = manager or SendLoopManager()
+    app.extensions["runtime_paths"] = runtime_paths
+    app.extensions["runtime_state"] = runtime_state
+    app.extensions["send_loop_manager"] = app_manager
+    app.register_blueprint(routes)
+
     root_logger = logging.getLogger()
-    root_logger.addHandler(LogQueueHandler(manager.event_bus))
+    log_handler = LogQueueHandler(app_manager.event_bus)
+    root_logger.addHandler(log_handler)
+    app.extensions["log_queue_handler"] = log_handler
     logger.info("Web UI 已启动 - LogQueueHandler 已注册")
     return app

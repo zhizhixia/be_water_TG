@@ -85,10 +85,9 @@ def test_daily_batch_checkin_filter_and_instance_lock(tmp_path, fake_clock) -> N
     lock.release()
 
 
-def test_lottery_api_open_and_stopped_cleanup(monkeypatch, tmp_path) -> None:
-    from web_app import app, manager
-
-    path = tmp_path / "state.db"
+def test_lottery_api_open_and_stopped_cleanup(
+    monkeypatch, app, manager, runtime_paths
+) -> None:
     monkeypatch.setattr("src.config.load_dotenv", lambda **kwargs: None)
     monkeypatch.setenv("API_ID", "1")
     monkeypatch.setenv("API_HASH", "x" * 32)
@@ -96,8 +95,9 @@ def test_lottery_api_open_and_stopped_cleanup(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("TARGET_GROUPS", "https://t.me/allowed")
     monkeypatch.setenv("MIN_INTERVAL", "10")
     monkeypatch.setenv("MAX_INTERVAL", "20")
-    monkeypatch.setenv("STATE_DB_PATH", str(path))
-    entry = LotteryStore(path).record_entry(1, 2, "f", "2026-08-01", "RESULT_UNKNOWN", "<unsafe>")
+    entry = LotteryStore(runtime_paths.state_db_path).record_entry(
+        1, 2, "f", "2026-08-01", "RESULT_UNKNOWN", "<unsafe>"
+    )
     client = app.test_client()
     assert client.get("/api/lotteries").get_json()["total"] == 0
     assert client.post(f"/api/lotteries/{entry}/open").status_code == 200

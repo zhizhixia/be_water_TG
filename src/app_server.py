@@ -7,6 +7,8 @@ from typing import Any
 
 from flask import Flask, jsonify
 
+from src.runtime_state import ApplicationRuntimeState
+
 APP_NAME = "BeWaterTG"
 APP_VERSION = "1.0.1"
 
@@ -23,13 +25,13 @@ class AppServer:
         app: Flask,
         *,
         port: int = 5000,
-        configuration_status: Callable[[], dict[str, bool]] | None = None,
+        runtime_state: ApplicationRuntimeState | None = None,
         server_factory: Callable[..., Any] | None = None,
     ) -> None:
         """使用可注入端口、状态提供器和服务工厂创建本地宿主。"""
         self._app = app
         self._requested_port = port
-        self._configuration_status = configuration_status or (lambda: {})
+        self._runtime_state = runtime_state or ApplicationRuntimeState()
         self._server_factory = server_factory
         self._server: Any | None = None
         self._thread: threading.Thread | None = None
@@ -85,10 +87,7 @@ class AppServer:
 
         @self._app.get("/api/health", endpoint="be_water_health")
         def health() -> Any:
-            try:
-                status = self._configuration_status()
-            except Exception:
-                status = {}
+            status = self._runtime_state.snapshot()
             return jsonify({
                 "app": APP_NAME,
                 "version": APP_VERSION,

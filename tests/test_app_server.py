@@ -8,6 +8,7 @@ import pytest
 
 import main
 from src.app_server import APP_NAME, APP_VERSION, AppServer, AppServerStartupError
+from src.runtime_state import ApplicationRuntimeState
 
 
 class FakeWaitressServer:
@@ -26,10 +27,12 @@ class FakeWaitressServer:
 def test_health_is_only_available_at_api_health_with_fixed_safe_status() -> None:
     """健康检查只返回固定标识、版本和配置布尔状态。"""
     app = Flask(__name__)
+    runtime_state = ApplicationRuntimeState()
+    runtime_state.update(configured=True)
     server = AppServer(
         app,
         port=0,
-        configuration_status=lambda: {"configured": True},
+        runtime_state=runtime_state,
         server_factory=lambda _app, **_: FakeWaitressServer(),
     )
 
@@ -60,7 +63,7 @@ def test_health_request_does_not_load_settings_dotenv_or_env(monkeypatch) -> Non
     app = Flask(__name__)
     server = AppServer(
         app,
-        configuration_status=main._configuration_status,
+        runtime_state=ApplicationRuntimeState(),
         server_factory=lambda _app, **_: FakeWaitressServer(),
     )
     server.start()
@@ -107,6 +110,7 @@ def test_main_exits_when_existing_local_service_owns_instance(monkeypatch) -> No
 
     monkeypatch.setattr(main, "AppInstance", lambda port: Instance())
     monkeypatch.setattr(main, "RuntimePaths", AssertionError)
+    monkeypatch.setattr(main, "ApplicationRuntimeState", AssertionError)
     monkeypatch.setattr(main, "migrate_legacy_runtime_data", AssertionError)
     monkeypatch.setattr(main, "AppServer", lambda *args, **kwargs: AssertionError())
 
@@ -146,7 +150,7 @@ def test_run_application_initializes_runtime_migrates_and_loads_same_paths_befor
         port = 5000
 
         def __init__(self, app: object, **kwargs: object) -> None:
-            events.append(("server", app, kwargs["configuration_status"]()))
+            events.append(("server", app, kwargs["runtime_state"].snapshot()))
 
         def start(self) -> None:
             events.append("start")
@@ -160,10 +164,14 @@ def test_run_application_initializes_runtime_migrates_and_loads_same_paths_befor
     paths = Paths()
     monkeypatch.setattr(main, "AppInstance", lambda port: Instance())
     monkeypatch.setattr(main.RuntimePaths, "from_environment", lambda: paths)
-    monkeypatch.setattr(main, "migrate_legacy_runtime_data", lambda legacy, actual: events.append(("migrate", legacy, actual)))
+    migration_result = type("MigrationResult", (), {"status": "ready", "migrated": (), "skipped": ()})()
+    monkeypatch.setattr(main, "migrate_legacy_runtime_data", lambda legacy, actual: events.append(("migrate", legacy, actual)) or migration_result)
     monkeypatch.setattr(main, "_load_configuration_status", lambda actual: events.append(("load", actual)) or True)
     monkeypatch.setattr(main, "AppServer", Server)
-    monkeypatch.setattr("web_app.create_app", lambda: events.append("create_app") or "fake-app")
+    monkeypatch.setattr(
+        "web_app.create_app",
+        lambda **kwargs: events.append(("create_app", kwargs)) or "fake-app",
+    )
 
     assert main.run_application() == 0
     assert events == [
@@ -172,8 +180,22 @@ def test_run_application_initializes_runtime_migrates_and_loads_same_paths_befor
         "ensure",
         ("migrate", paths.resource_dir, paths),
         ("load", paths),
-        "create_app",
-        ("server", "fake-app", {"configured": True}),
+        (
+            "create_app",
+            {
+                "runtime_paths": paths,
+                "runtime_state": events[5][1]["runtime_state"],
+            },
+        ),
+        (
+            "server",
+            "fake-app",
+            {
+                "configured": True,
+                "migration_status": "ready",
+                "setup_status": "configured",
+            },
+        ),
         "start",
         "wait",
         "stop",
@@ -232,3 +254,74 @@ def test_runtime_startup_failure_releases_lock_without_creating_server(monkeypat
 
     assert main.run_application() == 1
     assert events == ["acquire", "release"]
+
+
+@pytest.mark.parametrize(
+    "migration_status",
+    ["custom_database_requires_manual_copy", "migration_failed"],
+)
+def test_non_ready_migration_starts_local_web_without_loading_configuration(
+    monkeypatch, tmp_path, migration_status
+) -> None:
+    """迁移未就绪时保持未配置状态，但仍启动本地 Web 供后续向导使用。"""
+    events: list[object] = []
+
+    class Instance:
+        def acquire(self) -> bool:
+            return True
+
+        def release(self) -> None:
+            events.append("release")
+
+    class Server:
+        port = 5000
+
+        def __init__(self, app: object, **kwargs: object) -> None:
+            events.append(("server", app, kwargs["runtime_state"].snapshot()))
+
+        def start(self) -> None:
+            events.append("start")
+
+        def wait(self) -> None:
+            events.append("wait")
+
+        def stop(self) -> None:
+            events.append("stop")
+
+    paths = type(
+        "Paths",
+        (),
+        {
+            "resource_dir": tmp_path / "resources",
+            "logs_dir": tmp_path / "logs",
+            "ensure_directories": lambda self: self.logs_dir.mkdir(parents=True, exist_ok=True),
+        },
+    )()
+    result = type(
+        "MigrationResult",
+        (),
+        {"status": migration_status, "migrated": (), "skipped": ()},
+    )()
+    monkeypatch.setattr(main, "AppInstance", lambda port: Instance())
+    monkeypatch.setattr(main.RuntimePaths, "from_environment", lambda: paths)
+    monkeypatch.setattr(main, "setup_root_logger", lambda actual: None)
+    monkeypatch.setattr(main, "migrate_legacy_runtime_data", lambda legacy, actual: result)
+    monkeypatch.setattr(
+        main,
+        "_load_configuration_status",
+        lambda actual: (_ for _ in ()).throw(AssertionError("迁移未就绪不得加载配置")),
+    )
+    monkeypatch.setattr(main, "AppServer", Server)
+    monkeypatch.setattr(
+        "web_app.create_app",
+        lambda **kwargs: events.append(("create_app", kwargs)) or "fake-app",
+    )
+
+    assert main.run_application() == 0
+    server_event = next(event for event in events if isinstance(event, tuple) and event[0] == "server")
+    assert server_event[2] == {
+        "configured": False,
+        "migration_status": migration_status,
+        "setup_status": "configuration_required",
+    }
+    assert events[-4:] == ["start", "wait", "stop", "release"]

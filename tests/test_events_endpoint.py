@@ -1,32 +1,25 @@
 """/api/events 端点 last_event_id 回放与标准 SSE 格式测试。"""
 from __future__ import annotations
 
-import json
-
 import pytest
-
-from web_app import app, manager
 
 
 @pytest.fixture
-def client():
-    app.config["TESTING"] = True
+def client(app):
+    """返回当前工厂实例的 Flask 测试客户端。"""
     return app.test_client()
 
 
-def _reset_event_bus():
+def _reset_event_bus(manager) -> None:
     """清理 EventBus 状态，保证每个测试从干净的 seq/history/subscribers 开始。"""
     manager.event_bus._history.clear()
     manager.event_bus._seq = 0
     manager.event_bus._subscribers.clear()
 
 
-def _read_sse_chunks(resp, max_chunks: int = 5) -> list[bytes]:
-    """从 SSE streaming response 读取最多 max_chunks 个 chunk，然后断开连接。
-
-    断开后断言订阅者已从 EventBus._subscribers 中移除（验证 finally: unsubscribe(q) 生效）。
-    """
-    gen = resp.response  # generate() 生成器，yield 返回 str
+def _read_sse_chunks(resp, manager, max_chunks: int = 5) -> list[bytes]:
+    """读取有限 SSE 块，并验证断开后订阅者已被移除。"""
+    gen = resp.response
     chunks: list[bytes] = []
     for _ in range(max_chunks):
         try:
@@ -36,54 +29,51 @@ def _read_sse_chunks(resp, max_chunks: int = 5) -> list[bytes]:
         if isinstance(val, str):
             val = val.encode("utf-8")
         chunks.append(val)
-    # 进入 generate() 后已 subscribe，此时订阅者数应 >=1
     subscriber_count_active = len(manager.event_bus._subscribers)
-    gen.close()  # 触发 GeneratorExit → generate() 执行 finally: unsubscribe(q)
-    # 关键：gen.close 后 finally 块应已 unsubscribe，订阅者数应少于活跃时
+    gen.close()
     assert len(manager.event_bus._subscribers) < subscriber_count_active, (
         "SSE generator close 后未触发 unsubscribe，存在订阅者泄漏"
     )
     return chunks
 
 
-def test_events_no_last_id_returns_current_status_and_new(client) -> None:
+def test_events_no_last_id_returns_current_status_and_new(client, manager) -> None:
     """无 last_event_id：返回当前 status 首条 + 后续新事件。"""
-    _reset_event_bus()
+    _reset_event_bus(manager)
     import asyncio
+
     asyncio.run(manager.event_bus.emit_status("running"))
 
     resp = client.get("/api/events")
-    chunks = _read_sse_chunks(resp, max_chunks=2)
-    assert any(b"running" in c for c in chunks)
-    # 应包含标准 SSE id 行（首条 status 用 id: 0 占位也可接受）
-    assert any(b"id:" in c for c in chunks)
+    chunks = _read_sse_chunks(resp, manager, max_chunks=2)
+    assert any(b"running" in chunk for chunk in chunks)
+    assert any(b"id:" in chunk for chunk in chunks)
 
 
-def test_events_with_last_event_id_replays(client) -> None:
+def test_events_with_last_event_id_replays(client, manager) -> None:
     """?last_event_id=N 仅回放 seq>N 的历史事件。"""
-    _reset_event_bus()
+    _reset_event_bus(manager)
     import asyncio
+
     asyncio.run(manager.event_bus.emit_log("info", "old"))
     asyncio.run(manager.event_bus.emit_log("info", "new"))
-    # 取第一个事件 seq（应为 1，因为 status 未发过——emit_log 走 _publish seq 自增）
     seq_old = list(manager.event_bus._history)[0][0]
 
     resp = client.get(f"/api/events?last_event_id={seq_old}")
-    chunks = _read_sse_chunks(resp, max_chunks=2)
-    # 应回放 seq>seq_old 的事件
+    chunks = _read_sse_chunks(resp, manager, max_chunks=2)
     body = b"".join(chunks)
     assert b"new" in body
-    # 关键断言：new 事件出现在某 chunk 中
-    assert any(b"new" in c for c in chunks)
+    assert any(b"new" in chunk for chunk in chunks)
 
 
-def test_events_invalid_last_event_id_falls_back_to_zero(client) -> None:
-    """?last_event_id=非法值 解析失败时按 0 处理，回放全部历史。"""
-    _reset_event_bus()
+def test_events_invalid_last_event_id_falls_back_to_zero(client, manager) -> None:
+    """非法 last_event_id 按 0 处理并回放全部历史。"""
+    _reset_event_bus(manager)
     import asyncio
+
     asyncio.run(manager.event_bus.emit_log("info", "x"))
 
     resp = client.get("/api/events?last_event_id=abc")
     assert resp.status_code == 200
-    chunks = _read_sse_chunks(resp, max_chunks=2)
-    assert any(b"x" in c for c in chunks)
+    chunks = _read_sse_chunks(resp, manager, max_chunks=2)
+    assert any(b"x" in chunk for chunk in chunks)
