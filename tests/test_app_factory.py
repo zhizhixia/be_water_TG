@@ -1,6 +1,8 @@
 """Flask 工厂的依赖注入与实例隔离契约测试。"""
 from __future__ import annotations
 
+import logging
+
 from src.runtime_paths import RuntimePaths
 from src.runtime_state import ApplicationRuntimeState
 from web_app import create_app
@@ -45,3 +47,32 @@ def test_web_app_module_has_no_global_flask_app_or_manager() -> None:
 
     assert not hasattr(web_app, "app")
     assert not hasattr(web_app, "manager")
+
+
+def test_create_app_does_not_register_root_log_handler_or_publish_logs(tmp_path) -> None:
+    """仅创建 Flask 实例不得改变根日志器，也不得向任一实例广播日志。"""
+    root_logger = logging.getLogger()
+    baseline_handlers = list(root_logger.handlers)
+    apps = []
+    subscriptions = []
+    try:
+        for name in ("first", "second"):
+            app = create_app(
+                runtime_paths=RuntimePaths(tmp_path / "resources", tmp_path / name),
+                runtime_state=_ready_state(),
+            )
+            apps.append(app)
+            event_bus = app.extensions["send_loop_manager"].event_bus
+            subscriptions.append((event_bus, event_bus.subscribe()))
+
+        logging.getLogger("tests.app_factory.lifecycle").warning("factory-only warning")
+
+        assert root_logger.handlers == baseline_handlers
+        assert all(event_queue.empty() for _, event_queue in subscriptions)
+    finally:
+        for event_bus, event_queue in subscriptions:
+            event_bus.unsubscribe(event_queue)
+        for app in apps:
+            handler = app.extensions.get("log_queue_handler")
+            if handler is not None:
+                root_logger.removeHandler(handler)

@@ -9,6 +9,7 @@ import pytest
 import main
 from src.app_server import APP_NAME, APP_VERSION, AppServer, AppServerStartupError
 from src.runtime_state import ApplicationRuntimeState
+from web_manager import EventBus, LogQueueHandler
 
 
 class FakeWaitressServer:
@@ -22,6 +23,14 @@ class FakeWaitressServer:
 
     def close(self) -> None:
         self.closed = True
+
+
+def _app_with_log_handler(name: str) -> tuple[Flask, EventBus]:
+    """构造带实例日志处理器扩展的最小 Flask 应用。"""
+    app = Flask(name)
+    event_bus = EventBus()
+    app.extensions["log_queue_handler"] = LogQueueHandler(event_bus)
+    return app, event_bus
 
 
 def test_health_is_only_available_at_api_health_with_fixed_safe_status() -> None:
@@ -94,6 +103,97 @@ def test_server_uses_loopback_and_releases_waitress_server() -> None:
 
     assert created[0][0]["host"] == "127.0.0.1"
     assert created[0][1].closed
+
+
+def test_server_start_installs_current_app_log_handler_until_stop() -> None:
+    """服务运行期间只广播到当前应用，停止后移除根日志器引用。"""
+    root_logger = logging.getLogger()
+    baseline_handlers = list(root_logger.handlers)
+    current_app, current_bus = _app_with_log_handler("current")
+    _other_app, other_bus = _app_with_log_handler("other")
+    current_queue = current_bus.subscribe()
+    other_queue = other_bus.subscribe()
+    server = AppServer(
+        current_app,
+        server_factory=lambda _app, **_: FakeWaitressServer(),
+    )
+    try:
+        server.start()
+        assert root_logger.handlers == [
+            *baseline_handlers,
+            current_app.extensions["log_queue_handler"],
+        ]
+
+        logging.getLogger("tests.app_server.lifecycle").warning("while running")
+        assert current_queue.get_nowait()[1]["data"]["message"].endswith("while running")
+        assert other_queue.empty()
+
+        server.stop()
+        assert root_logger.handlers == baseline_handlers
+
+        logging.getLogger("tests.app_server.lifecycle").warning("after stop")
+        assert current_queue.empty()
+        assert other_queue.empty()
+    finally:
+        server.stop()
+        root_logger.removeHandler(current_app.extensions["log_queue_handler"])
+        current_bus.unsubscribe(current_queue)
+        other_bus.unsubscribe(other_queue)
+
+
+def test_server_repeated_start_and_stop_keeps_one_log_handler() -> None:
+    """重复启动不得重复注册，重复停止后仍可再次干净启动。"""
+    root_logger = logging.getLogger()
+    baseline_handlers = list(root_logger.handlers)
+    app, _event_bus = _app_with_log_handler("idempotent")
+    handler = app.extensions["log_queue_handler"]
+    server = AppServer(app, server_factory=lambda _app, **_: FakeWaitressServer())
+    try:
+        server.start()
+        server.start()
+        assert root_logger.handlers.count(handler) == 1
+        assert len(root_logger.handlers) == len(baseline_handlers) + 1
+
+        server.stop()
+        server.stop()
+        assert root_logger.handlers == baseline_handlers
+
+        server.start()
+        assert root_logger.handlers.count(handler) == 1
+        assert len(root_logger.handlers) == len(baseline_handlers) + 1
+    finally:
+        server.stop()
+        root_logger.removeHandler(handler)
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_exception"),
+    [
+        (OSError("address already in use"), AppServerStartupError),
+        (RuntimeError("factory failed"), RuntimeError),
+    ],
+)
+def test_server_factory_failure_removes_log_handler(
+    failure: Exception,
+    expected_exception: type[Exception],
+) -> None:
+    """服务工厂创建监听器失败时不得在根日志器遗留应用 handler。"""
+    root_logger = logging.getLogger()
+    baseline_handlers = list(root_logger.handlers)
+    app, _event_bus = _app_with_log_handler("factory-failure")
+    handler = app.extensions["log_queue_handler"]
+
+    def failing_factory(_app: Flask, **_kwargs: object) -> FakeWaitressServer:
+        raise failure
+
+    server = AppServer(app, server_factory=failing_factory)
+    try:
+        with pytest.raises(expected_exception):
+            server.start()
+        assert root_logger.handlers == baseline_handlers
+    finally:
+        server.stop()
+        root_logger.removeHandler(handler)
 
 
 def test_main_exits_when_existing_local_service_owns_instance(monkeypatch) -> None:

@@ -448,10 +448,10 @@ def api_events():
 
     def generate():
         q = event_bus.subscribe(last_seq=last_seq)
-        # 推送当前状态作为首条（用 id: 0 占位，避免与真实历史 seq 冲突）
-        state = event_bus.get_current_state()
-        yield f"id: 0\ndata: {json.dumps({'type': 'status', 'data': {'state': state}})}\n\n"
         try:
+            # 推送当前状态作为首条（用 id: 0 占位，避免与真实历史 seq 冲突）
+            state = event_bus.get_current_state()
+            yield f"id: 0\ndata: {json.dumps({'type': 'status', 'data': {'state': state}})}\n\n"
             while True:
                 try:
                     seq, data = q.get(timeout=30)
@@ -503,9 +503,6 @@ def create_app(
     app.extensions["send_loop_manager"] = app_manager
     app.register_blueprint(routes)
 
-    root_logger = logging.getLogger()
     log_handler = LogQueueHandler(app_manager.event_bus)
-    root_logger.addHandler(log_handler)
     app.extensions["log_queue_handler"] = log_handler
-    logger.info("Web UI 已启动 - LogQueueHandler 已注册")
     return app

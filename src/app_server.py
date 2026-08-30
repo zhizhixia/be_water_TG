@@ -1,6 +1,7 @@
 """Waitress 本地服务宿主。"""
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Callable
 from typing import Any
@@ -49,6 +50,10 @@ class AppServer:
         """创建 Waitress 监听器并在后台运行；失败时不留下服务资源。"""
         if self._server is not None:
             return
+        log_handler = self._app.extensions.get("log_queue_handler")
+        root_logger = logging.getLogger()
+        if log_handler is not None and log_handler not in root_logger.handlers:
+            root_logger.addHandler(log_handler)
         try:
             factory = self._server_factory
             if factory is None:
@@ -74,6 +79,9 @@ class AppServer:
 
     def stop(self) -> None:
         """关闭服务并回收后台线程。"""
+        log_handler = self._app.extensions.get("log_queue_handler")
+        if log_handler is not None:
+            logging.getLogger().removeHandler(log_handler)
         server, self._server = self._server, None
         if server is not None:
             server.close()

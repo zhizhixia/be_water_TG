@@ -37,6 +37,22 @@ def _read_sse_chunks(resp, manager, max_chunks: int = 5) -> list[bytes]:
     return chunks
 
 
+def test_events_unsubscribes_when_closed_after_first_status_chunk(app, manager) -> None:
+    """客户端只消费首条状态事件就断开时也必须立即取消订阅。"""
+    _reset_event_bus(manager)
+    with app.test_request_context("/api/events"):
+        response = app.view_functions["web.api_events"]()
+        generator = response.response
+        try:
+            first_chunk = next(generator)
+            assert "\"type\": \"status\"" in first_chunk
+            assert len(manager.event_bus._subscribers) == 1
+        finally:
+            generator.close()
+
+    assert len(manager.event_bus._subscribers) == 0
+
+
 def test_events_no_last_id_returns_current_status_and_new(client, manager) -> None:
     """无 last_event_id：返回当前 status 首条 + 后续新事件。"""
     _reset_event_bus(manager)
