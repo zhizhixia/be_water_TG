@@ -5,6 +5,7 @@ const appState = {
   dashboard: {state: "idle", total: 0, groups: [], alerts: []},
   lotteryPage: {offset: 0, limit: 50, total: 0, items: []},
   dirty: false,
+  configured: null,
   evtSource: null,
   toastTimer: null,
 };
@@ -119,6 +120,17 @@ async function api(url, options = {}) {
     throw error;
   }
   return data;
+}
+
+async function loadHealth() {
+  // 拉取进程内健康状态；网络异常时保守按已配置处理，避免误导已配置用户跳转
+  try {
+    const data = await api("/api/health");
+    appState.configured = Boolean(data.configured);
+  } catch (error) {
+    appState.configured = true;
+  }
+  return appState.configured;
 }
 
 async function loadDashboard() {
@@ -251,12 +263,22 @@ function collectConfig() {
 async function saveConfig() {
   const errors = validateConfig();
   if (errors.length) { showToast(errors[0], "error"); return; }
+  const wasUnconfigured = appState.configured === false;
   try {
     await api("/api/config", {method: "POST", body: JSON.stringify(collectConfig())});
     appState.dirty = false;
     await loadConfig();
-    await loadDashboard();
-    showToast("配置已保存", "success");
+    if (wasUnconfigured) {
+      appState.configured = true;
+      setView("overview");
+      connectSSE();
+      setInterval(loadDashboard, 30000);
+      await loadDashboard();
+      showToast("配置已保存，可开始自动参与", "success");
+    } else {
+      await loadDashboard();
+      showToast("配置已保存", "success");
+    }
   } catch (error) {
     if (error.field) {
       const input = byId(error.field);
@@ -359,6 +381,12 @@ document.addEventListener("DOMContentLoaded", async () => {
   byId("lotteryPrev").addEventListener("click", () => loadLotteryAlerts(Math.max(0, appState.lotteryPage.offset - appState.lotteryPage.limit)));
   byId("lotteryNext").addEventListener("click", () => loadLotteryAlerts(appState.lotteryPage.offset + appState.lotteryPage.limit));
   window.addEventListener("beforeunload", (event) => { if (appState.dirty) { event.preventDefault(); event.returnValue = ""; } });
+  const configured = await loadHealth();
+  if (!configured) {
+    setView("system");
+    showToast("首次使用：请先完成系统设置", "info");
+    return;
+  }
   await loadConfig();
   await loadDashboard();
   await loadLotteryAlerts();

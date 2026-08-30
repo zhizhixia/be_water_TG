@@ -243,6 +243,8 @@ def api_config_save():
         )
         validate_settings_for_save(settings)
         save_settings(settings, runtime_paths=_runtime_paths())
+        # 保存成功后立即原子更新进程内状态：健康检查与业务门禁无需重启即放行
+        _runtime_state().update(configured=True, setup_status="configured")
         return jsonify({"success": True})
     except SettingsValidationError as ex:
         return jsonify({"success": False, "error": str(ex), "field": ex.field}), 422
