@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 
-from src.message_loader import load_messages, validate_messages
+from src.message_loader import load_messages, parse_messages, validate_messages
+from src.message_paths import read_message_text
+from src.runtime_paths import RuntimePaths
 from src.selector import MessageSelector
 
 logger = logging.getLogger(__name__)
@@ -13,7 +15,12 @@ class MessageManager:
     同一文件被多个群组引用时，只加载一次无需重复处理。
     """
 
-    def __init__(self, group_file_map: dict[str, str]) -> None:
+    def __init__(
+        self,
+        group_file_map: dict[str, str],
+        *,
+        runtime_paths: RuntimePaths | None = None,
+    ) -> None:
         """初始化消息管理器。
 
         Args:
@@ -34,12 +41,18 @@ class MessageManager:
             if file_path in loaded_files:
                 self._selectors[group] = loaded_files[file_path]
             else:
-                messages = load_messages(file_path)
+                if runtime_paths is None:
+                    messages = load_messages(file_path)
+                    display_name = file_path
+                else:
+                    loaded = read_message_text(file_path, runtime_paths)
+                    messages = parse_messages(loaded.text)
+                    display_name = loaded.display_name
                 validate_messages(messages)
                 selector = MessageSelector(messages)
                 self._selectors[group] = selector
                 loaded_files[file_path] = selector
-                logger.info("已加载 %d 条消息从: %s", len(messages), file_path)
+                logger.info("已加载 %d 条消息: %s", len(messages), display_name)
 
     def get_message(self, group: str) -> str:
         """获取指定群组的下一条消息。

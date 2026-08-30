@@ -25,12 +25,13 @@ def load_messages(file_path: str) -> list[str]:
         raise FileNotFoundError(f"消息文件不存在: {file_path}")
 
     content = path.read_text(encoding="utf-8")
-    # 支持英文逗号和中文逗号
-    content = content.replace("，", ",")
-    messages = [msg.strip() for msg in content.split(",")]
-    messages = [msg for msg in messages if msg]
+    return parse_messages(content)
 
-    return messages
+
+def parse_messages(content: str) -> list[str]:
+    """解析逗号分隔的消息文本并过滤空项。"""
+    normalized = content.replace("，", ",")
+    return [message for item in normalized.split(",") if (message := item.strip())]
 
 
 def validate_messages(messages: list[str]) -> None:

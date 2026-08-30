@@ -97,3 +97,27 @@ def test_config_api_normalizes_message_file_group_keys(monkeypatch, app, runtime
     assert saved.call_args.kwargs == {"runtime_paths": runtime_paths}
     assert settings.target_groups == ["https://t.me/allowed"]
     assert settings.message_files == {"https://t.me/allowed": "messages.txt"}
+
+
+def test_config_api_rejects_uncontrolled_message_reference(monkeypatch, app) -> None:
+    """配置 API 在持久化前拒绝绝对消息路径。"""
+    _set_env(monkeypatch)
+    saved = Mock()
+    monkeypatch.setattr("web_app.save_settings", saved)
+
+    response = app.test_client().post(
+        "/api/config",
+        json={
+            "api_id": 1,
+            "api_hash": "x" * 32,
+            "phone": "+1",
+            "target_groups": ["@allowed"],
+            "message_files": {"@allowed": r"C:\\outside\\messages.txt"},
+            "min_interval": 10,
+            "max_interval": 20,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.get_json()["field"] == "message_files"
+    saved.assert_not_called()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.message_loader import load_messages, validate_messages
+from src.message_loader import load_messages, parse_messages, validate_messages
 
 
 class TestLoadMessages:
@@ -48,6 +48,13 @@ class TestLoadMessages:
         f.write_text("", encoding="utf-8")
         result = load_messages(str(f))
         assert result == []
+
+
+class TestParseMessages:
+    """parse_messages 纯文本解析测试。"""
+
+    def test_parse_messages_supports_chinese_comma_and_filters_blanks(self):
+        assert parse_messages("你好，世界, ,再见") == ["你好", "世界", "再见"]
 
 
 class TestValidateMessages:

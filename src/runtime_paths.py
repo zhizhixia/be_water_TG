@@ -34,6 +34,7 @@ class RuntimePaths:
             self.sender_session_path.parent,
             self.logs_dir,
             self.backups_dir,
+            self.messages_dir,
         ):
             directory.mkdir(parents=True, exist_ok=True)
 
@@ -51,6 +52,11 @@ class RuntimePaths:
     def sender_session_path(self) -> Path:
         """返回 Telegram 发送账号会话文件路径。"""
         return self.data_dir / "session" / "sender_session.session"
+
+    @property
+    def messages_dir(self) -> Path:
+        """返回用户可编辑消息文件目录。"""
+        return self.data_dir / "config" / "messages"
 
     @property
     def logs_dir(self) -> Path:

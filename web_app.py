@@ -4,7 +4,7 @@ import json
 import logging
 import os
 import queue
-from pathlib import Path
+import re
 
 from flask import Blueprint, Flask, Response, current_app, jsonify, render_template, request
 
@@ -20,6 +20,7 @@ from src.config import (
 from src.group_parser import parse_group_links, validate_group_links
 from src.sender import TelegramSender
 from src.lottery_store import LotteryStore
+from src.message_paths import MessagePathError, validate_message_reference
 from src.runtime_paths import RuntimePaths
 from src.runtime_state import ApplicationRuntimeState
 from src.state_store import StateStore
@@ -44,6 +45,35 @@ def _runtime_state() -> ApplicationRuntimeState:
 def _manager() -> SendLoopManager:
     """返回当前 Flask 实例独占的发送循环管理器。"""
     return current_app.extensions["send_loop_manager"]
+
+
+def _safe_group_message_reference(group: str) -> str:
+    """把已校验群组链接末段转换为不可形成路径的默认消息文件名。"""
+    group_name = group.rsplit("/", 1)[-1]
+    safe_group = re.sub(r"[^A-Za-z0-9_-]", "_", group_name)
+    return f"messages_{safe_group or 'group'}.txt"
+
+
+def _build_message_manager(
+    settings: Settings,
+    runtime_paths: RuntimePaths,
+) -> MessageManager:
+    """仅通过受控引用为生产 Web 构造消息管理器。"""
+    if settings.message_files:
+        return MessageManager(settings.message_files, runtime_paths=runtime_paths)
+
+    shared_mapping = {group: "messages.txt" for group in settings.target_groups}
+    try:
+        return MessageManager(shared_mapping, runtime_paths=runtime_paths)
+    except MessagePathError as error:
+        if str(error) != "消息文件不存在":
+            raise
+
+    fallback_mapping = {
+        group: _safe_group_message_reference(group)
+        for group in settings.target_groups
+    }
+    return MessageManager(fallback_mapping, runtime_paths=runtime_paths)
 
 
 # ===== 页面路由 =====
@@ -139,6 +169,11 @@ def api_config_save():
             raise SettingsValidationError(
                 "message_files", "Message files must be a group-to-path mapping"
             )
+        try:
+            for reference in raw_message_files.values():
+                validate_message_reference(reference)
+        except (MessagePathError, TypeError) as ex:
+            raise SettingsValidationError("message_files", str(ex)) from ex
         settings = Settings(
             api_id=int(data.get("api_id", 0)),
             api_hash=data.get("api_hash") or (current.api_hash if current else ""),
@@ -220,21 +255,8 @@ def api_start():
     except ValueError as ex:
         return jsonify({"success": False, "detail": str(ex)}), 422
 
-    # 构建 MessageManager
-    group_file_map = {}
-    if settings.message_files:
-        group_file_map = settings.message_files
-    else:
-        shared_fallback = Path("messages.txt")
-        for g in settings.target_groups:
-            group_file_map[g] = (
-                str(shared_fallback)
-                if shared_fallback.exists()
-                else f"messages_{g.split('/')[-1]}.txt"
-            )
-
     try:
-        message_manager = MessageManager(group_file_map)
+        message_manager = _build_message_manager(settings, _runtime_paths())
     except Exception as ex:
         return jsonify({"success": False, "error": f"加载消息文件失败: {ex}"}), 400
 
