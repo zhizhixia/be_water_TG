@@ -332,17 +332,14 @@ def _normalized_env_text(
     source: Path,
     paths: RuntimePaths,
     rewrite_custom_path: bool,
+    expected_source_digest: str | None = None,
 ) -> str | None:
-    """安全读取旧配置并生成数据库路径规范化后的文本。"""
-    source_descriptor = _open_regular_source(source)
-    if source_descriptor is None:
+    """使用一次安全读取的数据校验来源并生成数据库路径规范化文本。"""
+    source_snapshot = _read_legacy_env(source)
+    if source_snapshot is None:
         return None
-    try:
-        with os.fdopen(source_descriptor, "r", encoding="utf-8", newline="") as input_file:
-            source_text = input_file.read(_MAX_ENV_BYTES + 1)
-        if len(source_text.encode("utf-8")) > _MAX_ENV_BYTES:
-            return None
-    except (OSError, UnicodeError):
+    source_text, source_digest = source_snapshot
+    if expected_source_digest is not None and source_digest != expected_source_digest:
         return None
 
     output_lines: list[str] = []
@@ -371,9 +368,15 @@ def _rewrite_legacy_env_state_path(
     destination: Path,
     paths: RuntimePaths,
     rewrite_custom_path: bool = False,
+    expected_source_digest: str | None = None,
 ) -> bool:
     """迁移 .env，并将旧数据库路径规范化为固定绝对路径。"""
-    output_text = _normalized_env_text(source, paths, rewrite_custom_path)
+    output_text = _normalized_env_text(
+        source,
+        paths,
+        rewrite_custom_path,
+        expected_source_digest,
+    )
     if output_text is None:
         return False
     try:
@@ -395,9 +398,19 @@ def _rewrite_legacy_env_state_path(
     return committed and cleanup_succeeded
 
 
-def _env_matches_normalized_source(source: Path, destination: Path, paths: RuntimePaths) -> bool:
+def _env_matches_normalized_source(
+    source: Path,
+    destination: Path,
+    paths: RuntimePaths,
+    expected_source_digest: str | None = None,
+) -> bool:
     """确认已有目标配置精确等于当前源配置的固定路径规范化结果。"""
-    expected = _normalized_env_text(source, paths, rewrite_custom_path=True)
+    expected = _normalized_env_text(
+        source,
+        paths,
+        rewrite_custom_path=True,
+        expected_source_digest=expected_source_digest,
+    )
     if expected is None:
         return False
     destination_descriptor = _open_regular_source(destination)
@@ -469,8 +482,8 @@ def _backup_sqlite_atomically(source: Path, destination: Path) -> bool:
     return committed and cleanup_succeeded
 
 
-def _inspect_legacy_env(source: Path) -> tuple[bool, str] | None:
-    """安全读取旧配置并仅返回自定义路径标志与配置摘要。"""
+def _read_legacy_env(source: Path) -> tuple[str, str] | None:
+    """一次性安全读取受限配置，并返回文本与绑定身份和内容的摘要。"""
     descriptor = _open_regular_source(source)
     if descriptor is None:
         return None
@@ -484,6 +497,18 @@ def _inspect_legacy_env(source: Path) -> tuple[bool, str] | None:
     except (OSError, UnicodeError):
         return None
 
+    identity = f"{source_stat.st_dev}:{source_stat.st_ino}".encode("ascii")
+    digest = hashlib.sha256(b"runtime-env-v1\0" + identity + b"\0" + content).hexdigest()
+    return text, digest
+
+
+def _inspect_legacy_env(source: Path) -> tuple[bool, str] | None:
+    """安全读取旧配置并仅返回自定义路径标志与内容绑定摘要。"""
+    source_snapshot = _read_legacy_env(source)
+    if source_snapshot is None:
+        return None
+    text, source_digest = source_snapshot
+
     state_values: list[str] = []
     for line in text.splitlines():
         stripped = line.strip()
@@ -493,8 +518,7 @@ def _inspect_legacy_env(source: Path) -> tuple[bool, str] | None:
         if key.strip() == "STATE_DB_PATH":
             state_values.append(value.strip().strip("\"'"))
     is_custom = any(value != _DEFAULT_LEGACY_STATE_PATH for value in state_values)
-    identity = f"{source_stat.st_dev}:{source_stat.st_ino}".encode("ascii")
-    return is_custom, hashlib.sha256(identity).hexdigest()
+    return is_custom, source_digest
 
 
 def _write_initial_marker(paths: RuntimePaths, status: str, source_digest: str) -> bool:
@@ -602,7 +626,12 @@ def _block_custom_database(
         if not _validate_fixed_sqlite(paths.state_db_path):
             return MigrationResult((), (), "manual_database_invalid")
         if paths.env_path.exists():
-            if _env_matches_normalized_source(source, paths.env_path, paths):
+            if _env_matches_normalized_source(
+                source,
+                paths.env_path,
+                paths,
+                expected_source_digest=source_digest,
+            ):
                 return MigrationResult((), (), "ready")
             return MigrationResult((), (), _FAILED_STATUS)
         migrated = _rewrite_legacy_env_state_path(
@@ -610,6 +639,7 @@ def _block_custom_database(
             paths.env_path,
             paths,
             rewrite_custom_path=True,
+            expected_source_digest=source_digest,
         )
         if not migrated:
             return MigrationResult((), (), _FAILED_STATUS)
@@ -654,7 +684,12 @@ def migrate_legacy_runtime_data(legacy_dir: Path | str, paths: RuntimePaths) -> 
             skipped.append(name)
             continue
         if name == "env":
-            committed = _rewrite_legacy_env_state_path(source, destination, paths)
+            committed = _rewrite_legacy_env_state_path(
+                source,
+                destination,
+                paths,
+                expected_source_digest=source_digest,
+            )
         elif name == "state_db":
             committed = _backup_sqlite_atomically(source, destination)
         else:
