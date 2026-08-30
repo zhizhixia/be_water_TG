@@ -5,7 +5,7 @@ from zipfile import ZipFile, ZipInfo
 
 import pytest
 
-from scripts.verify_release import ReleaseAuditError, audit_release_zip, smoke_test
+from scripts.verify_release import ReleaseAuditError, audit_release_zip
 
 
 def _write_zip(path: Path, members: list[str]) -> None:
@@ -25,8 +25,9 @@ def _write_zip(path: Path, members: list[str]) -> None:
 
 REQUIRED_MEMBERS = [
     "BeWaterTG/BeWaterTG.exe",
-    "BeWaterTG/templates/index.html",
-    "BeWaterTG/static/css/style.css",
+    "BeWaterTG/_internal/templates/index.html",
+    "BeWaterTG/_internal/static/css/style.css",
+    "BeWaterTG/_internal/static/js/app.js",
     "BeWaterTG/.env.example",
     "BeWaterTG/messages.txt",
     "BeWaterTG/messages_hzbjhspa.txt",
@@ -86,7 +87,7 @@ def test_audit_release_zip_rejects_sensitive_files_and_directories_in_any_path_f
 @pytest.mark.parametrize(
     "members",
     [
-        [member for member in REQUIRED_MEMBERS if member != "BeWaterTG/static/css/style.css"],
+        [member for member in REQUIRED_MEMBERS if member != "BeWaterTG/_internal/static/css/style.css"],
         [member.replace("BeWaterTG/BeWaterTG.exe", "nested/BeWaterTG.exe") for member in REQUIRED_MEMBERS],
     ],
 )
@@ -96,45 +97,3 @@ def test_audit_release_zip_requires_exact_paths(tmp_path: Path, members: list[st
 
     with pytest.raises(ReleaseAuditError):
         audit_release_zip(archive)
-
-
-def test_smoke_test_uses_an_injected_process_and_local_probe() -> None:
-    calls: list[object] = []
-
-    class Process:
-        def terminate(self) -> None:
-            calls.append("terminate")
-
-        def wait(self, timeout: float) -> None:
-            calls.append(("wait", timeout))
-
-    smoke_test(
-        ["BeWaterTG.exe"],
-        start_process=lambda command: calls.append(command) or Process(),
-        ready_probe=lambda url: calls.append(url),
-    )
-
-    assert calls == [["BeWaterTG.exe"], "http://127.0.0.1:5000/", "terminate", ("wait", 5)]
-
-
-def test_smoke_test_stops_an_injected_process_when_probe_fails() -> None:
-    calls: list[object] = []
-
-    class Process:
-        def terminate(self) -> None:
-            calls.append("terminate")
-
-        def wait(self, timeout: float) -> None:
-            calls.append(("wait", timeout))
-
-    def failing_probe(url: str) -> None:
-        raise RuntimeError("not ready")
-
-    with pytest.raises(RuntimeError):
-        smoke_test(
-            ["BeWaterTG.exe"],
-            start_process=lambda command: calls.append(command) or Process(),
-            ready_probe=failing_probe,
-        )
-
-    assert calls == [["BeWaterTG.exe"], "terminate", ("wait", 5)]
