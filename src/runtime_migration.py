@@ -68,7 +68,11 @@ def _reserve_pending_database_target(target: Path) -> tuple[str, int | None]:
         0,  # 禁止其他句柄读取、写入或删除，阻断改名和替换。
         None,
         1,  # CREATE_NEW
-        0x04000100,  # FILE_FLAG_DELETE_ON_CLOSE | FILE_ATTRIBUTE_TEMPORARY
+        0x04200100,  # FILE_FLAG_DELETE_ON_CLOSE | FILE_ATTRIBUTE_TEMPORARY
+        # | FILE_FLAG_OPEN_REPARSE_POINT：不跟随 symlink/junction，直接打开
+        # reparse point 本身，从而对悬空符号链接稳定返回 ERROR_FILE_EXISTS，
+        # 避免不同 Windows 版本因跟随链接而误判目标不存在（悬空链接占位
+        # 必须视为命名空间已占用，记录永久 conflict）。
         None,
     )
     if handle != ctypes.c_void_p(-1).value:
