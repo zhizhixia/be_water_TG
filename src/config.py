@@ -7,7 +7,9 @@ from dataclasses import dataclass, field
 from datetime import time
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
+
+# 仅为兼容现有测试和外部 monkeypatch 保留该模块符号；配置加载不得调用 load_dotenv。
 
 from src.group_parser import normalize_group_link
 from src.runtime_paths import RuntimePaths
@@ -219,11 +221,18 @@ def load_settings(runtime_paths: RuntimePaths | None = None) -> Settings:
         ValueError: 配置缺失或无效时抛出。
     """
     paths = runtime_paths or RuntimePaths.from_environment()
-    load_dotenv(dotenv_path=paths.env_path)
+    file_values = dotenv_values(paths.env_path, interpolate=False)
 
-    api_id_str = os.getenv("API_ID")
-    api_hash = os.getenv("API_HASH")
-    phone = os.getenv("PHONE")
+    def get_value(name: str, default: str | None = None) -> str | None:
+        """按进程环境、当前 dotenv 文件、默认值的顺序读取单个配置。"""
+        if name in os.environ:
+            return os.environ[name]
+        value = file_values.get(name)
+        return value if value is not None else default
+
+    api_id_str = get_value("API_ID")
+    api_hash = get_value("API_HASH")
+    phone = get_value("PHONE")
 
     if not api_id_str:
         raise ValueError("API_ID is required in .env file")
@@ -233,8 +242,8 @@ def load_settings(runtime_paths: RuntimePaths | None = None) -> Settings:
         raise ValueError("PHONE is required in .env file")
 
     # 目标群组: 优先使用 TARGET_GROUPS (逗号分隔), 回退到 TARGET_GROUP
-    target_groups_str = os.getenv("TARGET_GROUPS")
-    target_group_str = os.getenv("TARGET_GROUP")
+    target_groups_str = get_value("TARGET_GROUPS")
+    target_group_str = get_value("TARGET_GROUP")
 
     target_groups: list[str] = []
     target_group: str = ""
@@ -255,8 +264,8 @@ def load_settings(runtime_paths: RuntimePaths | None = None) -> Settings:
     except ValueError:
         raise ValueError(f"API_ID must be an integer, got: {api_id_str}")
 
-    min_interval = int(os.getenv("MIN_INTERVAL", "60"))
-    max_interval = int(os.getenv("MAX_INTERVAL", "180"))
+    min_interval = int(get_value("MIN_INTERVAL", "60"))
+    max_interval = int(get_value("MAX_INTERVAL", "180"))
 
     if max_interval <= min_interval:
         raise ValueError(
@@ -264,9 +273,9 @@ def load_settings(runtime_paths: RuntimePaths | None = None) -> Settings:
         )
 
     # 代理配置（可选）
-    proxy_host = os.getenv("PROXY_HOST")  # 例如 127.0.0.1
-    proxy_port_str = os.getenv("PROXY_PORT")  # 例如 7890
-    proxy_type = os.getenv("PROXY_TYPE", "http")
+    proxy_host = get_value("PROXY_HOST")  # 例如 127.0.0.1
+    proxy_port_str = get_value("PROXY_PORT")  # 例如 7890
+    proxy_type = get_value("PROXY_TYPE", "http")
 
     proxy_port = int(proxy_port_str) if proxy_port_str else None
 
@@ -278,7 +287,7 @@ def load_settings(runtime_paths: RuntimePaths | None = None) -> Settings:
     # 消息文件映射 (可选): MESSAGE_FILES=群组链接|文件路径,群组2|文件2
     # 注意: 群组链接含完整 URL (https://t.me/xxx)，分隔符用 | 避免与 URL 的 : 冲突
     message_files: dict[str, str] = {}
-    mf_raw = os.getenv("MESSAGE_FILES", "")
+    mf_raw = get_value("MESSAGE_FILES", "")
     if mf_raw.strip():
         for part in mf_raw.split(","):
             part = part.strip()
@@ -296,45 +305,45 @@ def load_settings(runtime_paths: RuntimePaths | None = None) -> Settings:
             message_files[group.strip()] = path.strip()
 
     # AI 聊天模式配置
-    ai_enabled = os.getenv("AI_ENABLED", "").lower() in ("true", "1", "yes")
-    ai_api_key = os.getenv("AI_API_KEY", "")
-    ai_base_url = os.getenv("AI_BASE_URL", "https://api.deepseek.com/v1")
-    ai_model = os.getenv("AI_MODEL", "deepseek-chat")
-    ai_prompt = os.getenv("AI_PROMPT", "")
-    ai_context_count = int(os.getenv("AI_CONTEXT_COUNT", "5"))
-    ai_temperature = float(os.getenv("AI_TEMPERATURE", "0.7"))
-    ai_max_tokens = int(os.getenv("AI_MAX_TOKENS", "500"))
-    ai_timeout = int(os.getenv("AI_TIMEOUT", "30"))
+    ai_enabled = get_value("AI_ENABLED", "").lower() in ("true", "1", "yes")
+    ai_api_key = get_value("AI_API_KEY", "")
+    ai_base_url = get_value("AI_BASE_URL", "https://api.deepseek.com/v1")
+    ai_model = get_value("AI_MODEL", "deepseek-chat")
+    ai_prompt = get_value("AI_PROMPT", "")
+    ai_context_count = int(get_value("AI_CONTEXT_COUNT", "5"))
+    ai_temperature = float(get_value("AI_TEMPERATURE", "0.7"))
+    ai_max_tokens = int(get_value("AI_MAX_TOKENS", "500"))
+    ai_timeout = int(get_value("AI_TIMEOUT", "30"))
 
     # 定时运行窗口
-    schedule_enabled = os.getenv("SCHEDULE_ENABLED", "").lower() in ("true", "1", "yes")
-    schedule_morning_start = os.getenv("SCHEDULE_MORNING_START", "08:00")
-    schedule_morning_end = os.getenv("SCHEDULE_MORNING_END", "11:00")
-    schedule_afternoon_start = os.getenv("SCHEDULE_AFTERNOON_START", "14:00")
-    schedule_afternoon_end = os.getenv("SCHEDULE_AFTERNOON_END", "18:00")
-    anti_detect = os.getenv("ANTI_DETECT", "").lower() in ("true", "1", "yes")
-    typing_delay_min = int(os.getenv("TYPING_DELAY_MIN", "3"))
-    typing_delay_max = int(os.getenv("TYPING_DELAY_MAX", "8"))
-    thinking_delay_min = int(os.getenv("THINKING_DELAY_MIN", "5"))
-    thinking_delay_max = int(os.getenv("THINKING_DELAY_MAX", "25"))
-    skip_round_pct = int(os.getenv("SKIP_ROUND_PCT", "10"))
-    group_gap_min = int(os.getenv("GROUP_GAP_MIN", "1"))
-    group_gap_max = int(os.getenv("GROUP_GAP_MAX", "1"))
-    daily_limit = int(os.getenv("DAILY_LIMIT", "30"))
-    idle_threshold_minutes = int(os.getenv("IDLE_THRESHOLD_MINUTES", "10"))
-    question_reply_pct = int(os.getenv("QUESTION_REPLY_PCT", "70"))
-    discussion_reply_pct = int(os.getenv("DISCUSSION_REPLY_PCT", "15"))
-    reply_delay_min = int(os.getenv("REPLY_DELAY_MIN", "20"))
-    reply_delay_max = int(os.getenv("REPLY_DELAY_MAX", "90"))
+    schedule_enabled = get_value("SCHEDULE_ENABLED", "").lower() in ("true", "1", "yes")
+    schedule_morning_start = get_value("SCHEDULE_MORNING_START", "08:00")
+    schedule_morning_end = get_value("SCHEDULE_MORNING_END", "11:00")
+    schedule_afternoon_start = get_value("SCHEDULE_AFTERNOON_START", "14:00")
+    schedule_afternoon_end = get_value("SCHEDULE_AFTERNOON_END", "18:00")
+    anti_detect = get_value("ANTI_DETECT", "").lower() in ("true", "1", "yes")
+    typing_delay_min = int(get_value("TYPING_DELAY_MIN", "3"))
+    typing_delay_max = int(get_value("TYPING_DELAY_MAX", "8"))
+    thinking_delay_min = int(get_value("THINKING_DELAY_MIN", "5"))
+    thinking_delay_max = int(get_value("THINKING_DELAY_MAX", "25"))
+    skip_round_pct = int(get_value("SKIP_ROUND_PCT", "10"))
+    group_gap_min = int(get_value("GROUP_GAP_MIN", "1"))
+    group_gap_max = int(get_value("GROUP_GAP_MAX", "1"))
+    daily_limit = int(get_value("DAILY_LIMIT", "30"))
+    idle_threshold_minutes = int(get_value("IDLE_THRESHOLD_MINUTES", "10"))
+    question_reply_pct = int(get_value("QUESTION_REPLY_PCT", "70"))
+    discussion_reply_pct = int(get_value("DISCUSSION_REPLY_PCT", "15"))
+    reply_delay_min = int(get_value("REPLY_DELAY_MIN", "20"))
+    reply_delay_max = int(get_value("REPLY_DELAY_MAX", "90"))
     state_db_path = str(paths.state_db_path)
-    lottery_enabled = os.getenv("LOTTERY_ENABLED", "true").lower() in ("true", "1", "yes")
-    lottery_scan_interval_minutes = int(os.getenv("LOTTERY_SCAN_INTERVAL_MINUTES", "60"))
-    daily_pinned_lottery_scan_enabled = os.getenv("DAILY_PINNED_LOTTERY_SCAN_ENABLED", "true").lower() in ("true", "1", "yes")
-    daily_checkin_enabled = os.getenv("DAILY_CHECKIN_ENABLED", "true").lower() in ("true", "1", "yes")
-    lottery_per_group_daily_limit = int(os.getenv("LOTTERY_PER_GROUP_DAILY_LIMIT", "10"))
-    lottery_account_daily_limit = int(os.getenv("LOTTERY_ACCOUNT_DAILY_LIMIT", "30"))
-    lottery_action_gap_min_seconds = int(os.getenv("LOTTERY_ACTION_GAP_MIN_SECONDS", "20"))
-    lottery_action_gap_max_seconds = int(os.getenv("LOTTERY_ACTION_GAP_MAX_SECONDS", "60"))
+    lottery_enabled = get_value("LOTTERY_ENABLED", "true").lower() in ("true", "1", "yes")
+    lottery_scan_interval_minutes = int(get_value("LOTTERY_SCAN_INTERVAL_MINUTES", "60"))
+    daily_pinned_lottery_scan_enabled = get_value("DAILY_PINNED_LOTTERY_SCAN_ENABLED", "true").lower() in ("true", "1", "yes")
+    daily_checkin_enabled = get_value("DAILY_CHECKIN_ENABLED", "true").lower() in ("true", "1", "yes")
+    lottery_per_group_daily_limit = int(get_value("LOTTERY_PER_GROUP_DAILY_LIMIT", "10"))
+    lottery_account_daily_limit = int(get_value("LOTTERY_ACCOUNT_DAILY_LIMIT", "30"))
+    lottery_action_gap_min_seconds = int(get_value("LOTTERY_ACTION_GAP_MIN_SECONDS", "20"))
+    lottery_action_gap_max_seconds = int(get_value("LOTTERY_ACTION_GAP_MAX_SECONDS", "60"))
 
     if group_gap_max < group_gap_min:
         raise ValueError(
