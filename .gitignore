@@ -30,7 +30,7 @@ htmlcov/
 
 # Local tooling and generated caches
 .codegraph/
-.hermes/cache/
+.hermes/
 .sisyphus/
 .omo/
 .opencode/cache/
