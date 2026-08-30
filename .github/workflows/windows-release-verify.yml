@@ -64,11 +64,14 @@ jobs:
         if: failure()
         shell: bash
         run: |
-          uv run pytest tests -x --tb=short -q > pytest-diagnostic.txt 2>&1 || true
+          uv run pytest tests -x --tb=no -q > pytest-diagnostic.txt 2>&1 || true
+          grep -E "^(FAILED|ERROR)" pytest-diagnostic.txt | head -40 | while IFS= read -r line; do
+            echo "::error title=pytest::${line}"
+          done
           {
             echo "## pytest 失败详情"
             echo '```'
-            tail -150 pytest-diagnostic.txt
+            tail -120 pytest-diagnostic.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
