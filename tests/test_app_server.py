@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 from flask import Flask
 import pytest
 
@@ -34,7 +37,6 @@ def test_health_is_only_available_at_api_health_with_fixed_safe_status() -> None
 
     client = app.test_client()
     assert client.get("/health").status_code == 404
-
     response = client.get("/api/health")
     assert response.get_json() == {
         "app": APP_NAME,
@@ -92,7 +94,7 @@ def test_server_uses_loopback_and_releases_waitress_server() -> None:
 
 
 def test_main_exits_when_existing_local_service_owns_instance(monkeypatch) -> None:
-    """入口识别到既有 BeWaterTG 后不创建第二个服务。"""
+    """入口识别到既有 BeWaterTG 后不创建第二个服务或运行数据。"""
     class Instance:
         def acquire(self) -> bool:
             return False
@@ -104,6 +106,8 @@ def test_main_exits_when_existing_local_service_owns_instance(monkeypatch) -> No
             raise AssertionError("未持有锁不应释放")
 
     monkeypatch.setattr(main, "AppInstance", lambda port: Instance())
+    monkeypatch.setattr(main, "RuntimePaths", AssertionError)
+    monkeypatch.setattr(main, "migrate_legacy_runtime_data", AssertionError)
     monkeypatch.setattr(main, "AppServer", lambda *args, **kwargs: AssertionError())
 
     assert main.run_application() == 0
@@ -116,3 +120,115 @@ def test_port_conflict_returns_safe_startup_error() -> None:
 
     with pytest.raises(AppServerStartupError, match="端口"):
         AppServer(Flask(__name__), server_factory=occupied).start()
+
+
+def test_run_application_initializes_runtime_migrates_and_loads_same_paths_before_app(monkeypatch, tmp_path) -> None:
+    """持锁后在集中运行目录迁移并加载同一配置快照，再创建本机服务。"""
+    events: list[object] = []
+
+    class Paths:
+        resource_dir = tmp_path / "program-resource"
+        logs_dir = tmp_path / "runtime" / "logs"
+
+        def ensure_directories(self) -> None:
+            events.append("ensure")
+            self.logs_dir.mkdir(parents=True, exist_ok=True)
+
+    class Instance:
+        def acquire(self) -> bool:
+            events.append("acquire")
+            return True
+
+        def release(self) -> None:
+            events.append("release")
+
+    class Server:
+        port = 5000
+
+        def __init__(self, app: object, **kwargs: object) -> None:
+            events.append(("server", app, kwargs["configuration_status"]()))
+
+        def start(self) -> None:
+            events.append("start")
+
+        def wait(self) -> None:
+            events.append("wait")
+
+        def stop(self) -> None:
+            events.append("stop")
+
+    paths = Paths()
+    monkeypatch.setattr(main, "AppInstance", lambda port: Instance())
+    monkeypatch.setattr(main.RuntimePaths, "from_environment", lambda: paths)
+    monkeypatch.setattr(main, "migrate_legacy_runtime_data", lambda legacy, actual: events.append(("migrate", legacy, actual)))
+    monkeypatch.setattr(main, "_load_configuration_status", lambda actual: events.append(("load", actual)) or True)
+    monkeypatch.setattr(main, "AppServer", Server)
+    monkeypatch.setattr("web_app.create_app", lambda: events.append("create_app") or "fake-app")
+
+    assert main.run_application() == 0
+    assert events == [
+        "acquire",
+        "ensure",
+        "ensure",
+        ("migrate", paths.resource_dir, paths),
+        ("load", paths),
+        "create_app",
+        ("server", "fake-app", {"configured": True}),
+        "start",
+        "wait",
+        "stop",
+        "release",
+    ]
+
+
+def test_setup_root_logger_writes_only_to_supplied_runtime_log_directory(monkeypatch, tmp_path) -> None:
+    """根日志文件处理器使用集中运行日志目录，不使用源码目录。"""
+    runtime_log_dir = tmp_path / "runtime" / "logs"
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(logging, "basicConfig", lambda **kwargs: captured.update(kwargs))
+
+    paths = type(
+        "Paths",
+        (),
+        {"logs_dir": runtime_log_dir, "ensure_directories": lambda self: runtime_log_dir.mkdir(parents=True, exist_ok=True)},
+    )()
+    main.setup_root_logger(paths)
+
+    handlers = captured["handlers"]
+    file_handler = next(handler for handler in handlers if isinstance(handler, logging.FileHandler))
+    assert Path(file_handler.baseFilename) == runtime_log_dir / "be_water.log"
+    assert "main.py" not in file_handler.baseFilename
+    file_handler.close()
+
+
+@pytest.mark.parametrize("failure", ["paths", "migration"])
+def test_runtime_startup_failure_releases_lock_without_creating_server(monkeypatch, failure) -> None:
+    """运行目录或迁移失败时安全退出并释放已持有实例锁。"""
+    events: list[str] = []
+
+    class Instance:
+        def acquire(self) -> bool:
+            events.append("acquire")
+            return True
+
+        def release(self) -> None:
+            events.append("release")
+
+    class Paths:
+        resource_dir = Path("C:/program-resource")
+        logs_dir = Path("C:/runtime/logs")
+
+        def ensure_directories(self) -> None:
+            return None
+
+    monkeypatch.setattr(main, "AppInstance", lambda port: Instance())
+    if failure == "paths":
+        monkeypatch.setattr(main.RuntimePaths, "from_environment", lambda: (_ for _ in ()).throw(RuntimeError("no path")))
+    else:
+        monkeypatch.setattr(main.RuntimePaths, "from_environment", lambda: Paths())
+        monkeypatch.setattr(main, "setup_root_logger", lambda paths: None)
+        monkeypatch.setattr(main, "migrate_legacy_runtime_data", lambda legacy, paths: (_ for _ in ()).throw(RuntimeError("no migration")))
+    monkeypatch.setattr(main, "AppServer", lambda *args, **kwargs: events.append("server"))
+
+    assert main.run_application() == 1
+    assert events == ["acquire", "release"]
