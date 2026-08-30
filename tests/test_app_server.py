@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import gc
 import logging
+import time
+import weakref
 from pathlib import Path
 
 from flask import Flask
@@ -8,8 +12,17 @@ import pytest
 
 import main
 from src.app_server import APP_NAME, APP_VERSION, AppServer, AppServerStartupError
+from src.config import Settings
+from src.runtime_paths import RuntimePaths
 from src.runtime_state import ApplicationRuntimeState
-from web_manager import EventBus, LogQueueHandler
+from web_app import create_app
+from web_manager import (
+    EventBus,
+    LogQueueHandler,
+    bind_log_context,
+    current_log_context,
+    reset_log_context,
+)
 
 
 class FakeWaitressServer:
@@ -704,3 +717,190 @@ def test_non_ready_migration_starts_local_web_without_loading_configuration(
         "setup_status": "configuration_required",
     }
     assert events[-4:] == ["start", "wait", "stop", "release"]
+
+
+def _ready_runtime_state() -> ApplicationRuntimeState:
+    """构造日志隔离测试使用的就绪状态。"""
+    state = ApplicationRuntimeState()
+    state.update(configured=True, migration_status="ready", setup_status="configured")
+    return state
+
+
+def _isolated_app(tmp_path: Path, name: str):
+    """构造拥有独立 token、manager 与事件总线的应用。"""
+    return create_app(
+        runtime_paths=RuntimePaths(tmp_path / "resources", tmp_path / name),
+        runtime_state=_ready_runtime_state(),
+    )
+
+
+def test_two_running_app_servers_isolate_request_and_server_thread_root_logs(tmp_path: Path) -> None:
+    """双服务同时注册 root handler 时，请求与宿主线程日志只进入所属总线。"""
+    first = _isolated_app(tmp_path, "first")
+    second = _isolated_app(tmp_path, "second")
+    first.add_url_rule(
+        "/probe",
+        "first_probe",
+        lambda: (logging.getLogger("tests.request").warning("first-request") or "ok"),
+    )
+    second.add_url_rule(
+        "/probe",
+        "second_probe",
+        lambda: (logging.getLogger("tests.request").warning("second-request") or "ok"),
+    )
+
+    class LoggingServer(FakeWaitressServer):
+        def __init__(self, marker: str) -> None:
+            super().__init__()
+            self.marker = marker
+
+        def run(self) -> None:
+            logging.getLogger("tests.waitress").warning(self.marker)
+
+    first_server = AppServer(first, server_factory=lambda _app, **_: LoggingServer("first-server"))
+    second_server = AppServer(second, server_factory=lambda _app, **_: LoggingServer("second-server"))
+    first_bus = first.extensions["send_loop_manager"].event_bus
+    second_bus = second.extensions["send_loop_manager"].event_bus
+    first_queue = first_bus.subscribe()
+    second_queue = second_bus.subscribe()
+    outer = object()
+    outer_handle = bind_log_context(outer)
+    try:
+        first_server.start()
+        second_server.start()
+        first_server.wait()
+        second_server.wait()
+        assert first.test_client().get("/probe").status_code == 200
+        assert current_log_context() is outer
+        assert second.test_client().get("/probe").status_code == 200
+        assert current_log_context() is outer
+
+        first_messages = [item[1]["data"]["message"] for item in list(first_queue.queue)]
+        second_messages = [item[1]["data"]["message"] for item in list(second_queue.queue)]
+        assert any(message.endswith("first-server") for message in first_messages)
+        assert any(message.endswith("first-request") for message in first_messages)
+        assert not any("second-" in message for message in first_messages)
+        assert any(message.endswith("second-server") for message in second_messages)
+        assert any(message.endswith("second-request") for message in second_messages)
+        assert not any("first-" in message for message in second_messages)
+
+        first_server.stop()
+        handle = bind_log_context(second.extensions["log_context_token"])
+        try:
+            logging.getLogger("tests.after-stop").warning("second-still-running")
+        finally:
+            reset_log_context(handle)
+        assert any(
+            item[1]["data"]["message"].endswith("second-still-running")
+            for item in list(second_queue.queue)
+        )
+    finally:
+        reset_log_context(outer_handle)
+        first_server.stop()
+        second_server.stop()
+        first_bus.unsubscribe(first_queue)
+        second_bus.unsubscribe(second_queue)
+
+
+def test_unbound_root_log_is_not_broadcast_to_multiple_app_servers(tmp_path: Path) -> None:
+    """无实例上下文的 root 日志不得广播到任一 create_app 实例。"""
+    first = _isolated_app(tmp_path, "unbound-first")
+    second = _isolated_app(tmp_path, "unbound-second")
+    servers = [
+        AppServer(first, server_factory=lambda _app, **_: FakeWaitressServer()),
+        AppServer(second, server_factory=lambda _app, **_: FakeWaitressServer()),
+    ]
+    queues = [
+        app.extensions["send_loop_manager"].event_bus.subscribe()
+        for app in (first, second)
+    ]
+    try:
+        for server in servers:
+            server.start()
+            server.wait()
+        logging.getLogger("tests.unbound").warning("unbound-message")
+        assert all(event_queue.empty() for event_queue in queues)
+    finally:
+        for server in servers:
+            server.stop()
+        for app, event_queue in zip((first, second), queues):
+            app.extensions["send_loop_manager"].event_bus.unsubscribe(event_queue)
+
+
+def test_two_manager_threads_publish_logs_only_to_their_own_app(tmp_path: Path) -> None:
+    """两个 SendLoopManager 后台线程的完整生命周期均绑定各自实例 token。"""
+    apps = [_isolated_app(tmp_path, name) for name in ("manager-first", "manager-second")]
+    servers = [
+        AppServer(app, server_factory=lambda _app, **_: FakeWaitressServer())
+        for app in apps
+    ]
+    queues = [app.extensions["send_loop_manager"].event_bus.subscribe() for app in apps]
+
+    class TimeoutSender:
+        def __init__(self, marker: str) -> None:
+            self.marker = marker
+
+        async def start(self, **_kwargs: object) -> None:
+            logging.getLogger("tests.manager-thread").warning(self.marker)
+            raise asyncio.TimeoutError
+
+        async def disconnect(self) -> None:
+            return None
+
+    try:
+        for server in servers:
+            server.start()
+            server.wait()
+        for index, app in enumerate(apps):
+            settings = Settings(
+                api_id=12345,
+                api_hash="a" * 32,
+                phone="+861****8000",
+                target_groups=["https://t.me/example"],
+                state_db_path=str(tmp_path / f"manager-{index}.db"),
+            )
+            result = app.extensions["send_loop_manager"].start(
+                TimeoutSender(f"manager-{index}"), settings, object()
+            )
+            assert result.ok
+        deadline = time.monotonic() + 2
+        while any(app.extensions["send_loop_manager"]._thread is not None for app in apps):
+            assert time.monotonic() < deadline
+            time.sleep(0.01)
+
+        messages = [
+            [
+                item[1]["data"]["message"]
+                for item in list(event_queue.queue)
+                if item[1].get("type") == "log"
+            ]
+            for event_queue in queues
+        ]
+        assert any(message.endswith("manager-0") for message in messages[0])
+        assert not any(message.endswith("manager-1") for message in messages[0])
+        assert any(message.endswith("manager-1") for message in messages[1])
+        assert not any(message.endswith("manager-0") for message in messages[1])
+        assert current_log_context() is None
+    finally:
+        for server in servers:
+            server.stop()
+        for app, event_queue in zip(apps, queues):
+            app.extensions["send_loop_manager"].event_bus.unsubscribe(event_queue)
+
+
+def test_stopped_app_server_releases_event_bus_for_gc(tmp_path: Path) -> None:
+    """停止服务并释放应用引用后，root handler 不得继续持有旧事件总线。"""
+    app = _isolated_app(tmp_path, "collectible")
+    event_bus = app.extensions["send_loop_manager"].event_bus
+    reference = weakref.ref(event_bus)
+    server = AppServer(app, server_factory=lambda _app, **_: FakeWaitressServer())
+    server.start()
+    server.wait()
+    server.stop()
+
+    del event_bus
+    del server
+    del app
+    gc.collect()
+
+    assert reference() is None

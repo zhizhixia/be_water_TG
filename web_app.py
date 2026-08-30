@@ -6,7 +6,7 @@ import os
 import queue
 import re
 
-from flask import Blueprint, Flask, Response, current_app, jsonify, render_template, request
+from flask import Blueprint, Flask, Response, current_app, g, jsonify, render_template, request
 
 from src.ai_client import AIClient
 from src.ai_sender import AISender
@@ -25,11 +25,34 @@ from src.runtime_paths import RuntimePaths
 from src.runtime_state import ApplicationRuntimeState
 from src.state_store import StateStore
 from ui.message_manager import MessageManager
-from web_manager import LogQueueHandler, SendLoopManager
+from web_manager import (
+    LogQueueHandler,
+    SendLoopManager,
+    bind_log_context,
+    reset_log_context,
+)
 
 logger = logging.getLogger(__name__)
 
 routes = Blueprint("web", __name__)
+
+_RUNTIME_BLOCKED_ERROR = "应用尚未完成运行数据迁移或配置"
+_PUBLIC_ENDPOINTS = {"web.index", "web.api_events", "be_water_health"}
+_CONFIG_ENDPOINTS = {"web.api_config_get", "web.api_config_save"}
+
+
+@routes.before_app_request
+def _guard_runtime_routes():
+    """在任何运行依赖构造前统一阻断未完成迁移或配置的路由。"""
+    endpoint = request.endpoint
+    if endpoint is None or endpoint in _PUBLIC_ENDPOINTS:
+        return None
+    snapshot = _runtime_state().snapshot()
+    if snapshot["migration_status"] != "ready":
+        return jsonify({"success": False, "error": _RUNTIME_BLOCKED_ERROR}), 409
+    if endpoint not in _CONFIG_ENDPOINTS and not snapshot["configured"]:
+        return jsonify({"success": False, "error": _RUNTIME_BLOCKED_ERROR}), 409
+    return None
 
 
 def _runtime_paths() -> RuntimePaths:
@@ -519,12 +542,29 @@ def create_app(
 ) -> Flask:
     """使用显式运行路径、状态和可选管理器创建隔离的 Flask 应用。"""
     app = Flask(__name__)
-    app_manager = manager or SendLoopManager()
+    log_context_token = object()
+    app_manager = manager or SendLoopManager(log_context_token)
+    if manager is not None:
+        app_manager.bind_log_context_token(log_context_token)
     app.extensions["runtime_paths"] = runtime_paths
     app.extensions["runtime_state"] = runtime_state
     app.extensions["send_loop_manager"] = app_manager
+    app.extensions["log_context_token"] = log_context_token
+
+    @app.before_request
+    def _bind_request_log_context() -> None:
+        """将本次请求日志绑定到当前应用实例。"""
+        g._bewatertg_log_context_handle = bind_log_context(log_context_token)
+
+    @app.teardown_request
+    def _reset_request_log_context(_error: BaseException | None) -> None:
+        """请求成功、门禁提前返回或异常时均恢复原日志上下文。"""
+        handle = g.pop("_bewatertg_log_context_handle", None)
+        if handle is not None:
+            reset_log_context(handle)
+
     app.register_blueprint(routes)
 
-    log_handler = LogQueueHandler(app_manager.event_bus)
+    log_handler = LogQueueHandler(app_manager.event_bus, expected_token=log_context_token)
     app.extensions["log_queue_handler"] = log_handler
     return app

@@ -9,6 +9,7 @@ from typing import Any
 from flask import Flask, jsonify
 
 from src.runtime_state import ApplicationRuntimeState
+from web_manager import bind_log_context, reset_log_context
 
 APP_NAME = "BeWaterTG"
 APP_VERSION = "1.0.1"
@@ -121,8 +122,12 @@ class AppServer:
             })
 
     def _run(self) -> None:
+        handle = bind_log_context(self._app.extensions.get("log_context_token"))
         try:
-            if self._server is not None:
-                self._server.run()
-        except BaseException as exc:
-            self._run_error = exc
+            try:
+                if self._server is not None:
+                    self._server.run()
+            except BaseException as exc:
+                self._run_error = exc
+        finally:
+            reset_log_context(handle)

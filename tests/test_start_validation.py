@@ -178,3 +178,36 @@ def test_start_api_uses_controlled_manager_without_connecting_external_services(
 
     assert response.status_code == 200
     assert captured == {"message": "可信内置", "settings": settings}
+
+
+def test_start_api_thread_failure_returns_structured_409_and_keeps_database(
+    app, manager, runtime_paths, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """线程启动失败不得冒泡 500，且保留已合法创建的固定状态库。"""
+    runtime_paths.resource_dir.mkdir()
+    (runtime_paths.resource_dir / "messages.txt").write_text("可信内置", encoding="utf-8")
+    settings = Settings(
+        api_id=1,
+        api_hash="x" * 32,
+        phone="+1",
+        target_groups=["https://t.me/example"],
+        state_db_path=str(runtime_paths.state_db_path),
+    )
+
+    class FailingThread:
+        def __init__(self, **_kwargs: object) -> None:
+            return None
+
+        def start(self) -> None:
+            raise RuntimeError("thread start failed")
+
+    monkeypatch.setattr("web_app.load_settings", lambda **_kwargs: settings)
+    monkeypatch.setattr("web_app.TelegramSender", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr("web_manager.threading.Thread", FailingThread)
+
+    response = app.test_client().post("/api/start")
+
+    assert response.status_code == 409
+    assert response.get_json() == {"success": False, "error": "发送线程启动失败"}
+    assert manager.state.value == "stopped"
+    assert runtime_paths.state_db_path.exists()

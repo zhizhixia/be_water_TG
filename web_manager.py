@@ -8,6 +8,7 @@ import sys
 import threading
 from collections import deque
 from concurrent.futures import Future
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from threading import Lock
 from typing import Any, Callable, Mapping, TypeVar
@@ -20,6 +21,25 @@ from ui.message_manager import MessageManager
 from ui.send_loop import SendRuntime, SendState, send_loop
 
 logger = logging.getLogger(__name__)
+
+_CURRENT_LOG_CONTEXT: ContextVar[object | None] = ContextVar(
+    "bewatertg_log_context", default=None
+)
+
+
+def bind_log_context(token: object | None) -> Token:
+    """将当前执行上下文绑定到指定应用日志实例。"""
+    return _CURRENT_LOG_CONTEXT.set(token)
+
+
+def reset_log_context(handle: Token) -> None:
+    """可靠恢复绑定前的日志实例上下文。"""
+    _CURRENT_LOG_CONTEXT.reset(handle)
+
+
+def current_log_context() -> object | None:
+    """返回当前执行上下文绑定的应用日志实例。"""
+    return _CURRENT_LOG_CONTEXT.get()
 
 
 _SSE_SENSITIVE_FIELD_PARTS = (
@@ -199,15 +219,21 @@ class EventBus:
 
 
 class LogQueueHandler(logging.Handler):
-    def __init__(self, event_bus: EventBus) -> None:
+    def __init__(self, event_bus: EventBus, expected_token: object | None = None) -> None:
         super().__init__()
         self._event_bus = event_bus
+        self._expected_token = expected_token
         self.setFormatter(logging.Formatter(
             "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
             datefmt="%H:%M:%S",
         ))
 
     def emit(self, record: logging.LogRecord) -> None:
+        if (
+            self._expected_token is not None
+            and current_log_context() is not self._expected_token
+        ):
+            return
         try:
             level = "error" if record.levelno >= logging.ERROR else "warning" if record.levelno >= logging.WARNING else "info"
             msg = self.format(record)
@@ -250,7 +276,7 @@ class SendLoopManager:
     保证 Flask 多请求并发下状态一致。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, log_context_token: object | None = None) -> None:
         self._state_lock = threading.RLock()
         self._state = SendState.IDLE
         self._stop_event = threading.Event()
@@ -262,6 +288,14 @@ class SendLoopManager:
         self._active_settings: Settings | None = None
         self.lottery_dashboard = LotteryDashboardService()
         self._lottery_events = LotteryEventBus(lambda: None)
+        self._log_context_token = log_context_token
+
+    def bind_log_context_token(self, token: object) -> None:
+        """将管理器后台生命周期绑定到所属 Flask 实例。"""
+        with self._state_lock:
+            if self._thread is not None:
+                raise RuntimeError("发送线程运行期间不能更换日志上下文")
+            self._log_context_token = token
 
     @property
     def state(self) -> SendState:
@@ -375,22 +409,54 @@ class SendLoopManager:
             state_store = StateStore(settings.state_db_path)
         except Exception as exc:
             return TransitionResult(ok=False, reason=f"State store unavailable: {exc}")
-        result = self.transition(SendState.STARTING)
-        if not result.ok:
-            return result
-        self._active_settings = settings
-        self._state_store = state_store
-        self._runtime = SendRuntime()
-        self._thread = threading.Thread(
-            target=self._run_loop,
-            args=(sender, settings, message_manager, ai_sender),
-            daemon=True,
-        )
-        self._thread.start()
+        with self._state_lock:
+            result = self.transition(SendState.STARTING)
+            if not result.ok:
+                return result
+            self._active_settings = settings
+            self._state_store = state_store
+            self._runtime = SendRuntime()
+            launch_thread: threading.Thread | None = None
+            try:
+                launch_thread = threading.Thread(
+                    target=self._run_loop,
+                    args=(sender, settings, message_manager, ai_sender),
+                    daemon=True,
+                )
+                # 必须在 start 前发布引用；快速结束线程才可安全清除自身。
+                self._thread = launch_thread
+                launch_thread.start()
+            except Exception:
+                # 仅回滚本次仍持有的启动状态，不能覆盖已快速结束线程的真实状态。
+                owns_start = self._thread is launch_thread or (
+                    launch_thread is None and self._state == SendState.STARTING
+                )
+                if owns_start:
+                    self._thread = None
+                    self._active_settings = None
+                    self._state_store = None
+                    self._runtime = SendRuntime()
+                    if self._state in (SendState.STARTING, SendState.STOPPING):
+                        self.transition(SendState.STOPPED)
+                return TransitionResult(ok=False, reason="发送线程启动失败")
         logger.info("发送循环已启动")
         return TransitionResult(ok=True)
 
     def _run_loop(
+        self,
+        sender: TelegramSender,
+        settings: Settings,
+        message_manager: MessageManager,
+        ai_sender=None,
+    ) -> None:
+        """在所属应用日志上下文中运行完整后台线程生命周期。"""
+        handle = bind_log_context(self._log_context_token)
+        try:
+            self._run_loop_in_context(sender, settings, message_manager, ai_sender)
+        finally:
+            reset_log_context(handle)
+
+    def _run_loop_in_context(
         self,
         sender: TelegramSender,
         settings: Settings,
