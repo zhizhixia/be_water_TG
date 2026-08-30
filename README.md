@@ -44,6 +44,19 @@ TARGET_GROUPS=https://t.me/已授权群组
 
 浏览器访问 <http://127.0.0.1:5000>。首次真实连接 Telegram 时，控制台会请求登录验证码；请只在已授权测试账号与群组上完成该流程。`run.bat` 也可启动服务，但其中 Python 路径可能需要按本机环境调整。
 
+## Windows 发布构建（v1.0.1）
+
+发布构建只使用项目虚拟环境，不读取 `.env`、session 或本地数据库：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\build_windows.py
+.\.venv\Scripts\python.exe scripts\verify_release.py dist\BeWaterTG-win64.zip
+```
+
+构建会生成 `dist\BeWaterTG\`（onedir、保留控制台）、`dist\BeWaterTG-win64.zip` 与 `dist\SHA256SUMS.txt`。需先在项目环境中安装 PyInstaller；依赖清单集成后应将其固定版本。
+
+烟雾测试骨架仅允许 `http://127.0.0.1`；它支持注入子进程和就绪探针，当前不要求 `main.py` 提供专用健康检查接口。
+
 ## 测试（不连接真实服务）
 
 以下命令只运行 pytest；测试使用 fake/mock 和网络隔离，不登录 Telegram、不发送群消息、不调用 AI 或其他真实网络服务。不要在测试命令中填入真实凭据，也不需要启动 Web 服务。

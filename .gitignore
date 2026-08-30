@@ -57,6 +57,7 @@ be_water_TG/
 build/
 dist/
 *.spec
+!packaging/BeWaterTG.spec
 
 # OS
 .DS_Store
