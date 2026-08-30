@@ -4,6 +4,8 @@ import inspect
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -84,6 +86,74 @@ def test_custom_database_path_creates_non_sensitive_pending_without_opening_sour
     assert "marker-secret" not in marker_text
     assert str(custom_database) not in caplog.text
     assert "marker-secret" not in caplog.text
+
+
+@pytest.mark.skipif(os.name != "nt", reason="独占目标预约仅由 Windows 提供保证")
+def test_pending_marker_commit_reserves_target_against_concurrent_sqlite_creation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """提交 pending marker 前并发 SQLite 创建必须被预约阻断，且返回后目标不存在。"""
+    from src import runtime_migration
+
+    legacy = tmp_path / "legacy"
+    custom_database = tmp_path / "private" / "custom.db"
+    custom_database.parent.mkdir()
+    custom_database.write_bytes(b"source-kept")
+    _write_custom_legacy_env(legacy, custom_database)
+    paths = RuntimePaths.from_environment(tmp_path / "appdata", tmp_path / "resources")
+    original_write_marker = runtime_migration._write_initial_marker
+    creation_blocked = False
+
+    def create_database_before_marker(*args, **kwargs) -> bool:
+        nonlocal creation_blocked
+        try:
+            with sqlite3.connect(paths.state_db_path) as connection:
+                connection.execute("CREATE TABLE raced (value TEXT)")
+        except (OSError, sqlite3.Error):
+            creation_blocked = True
+        return original_write_marker(*args, **kwargs)
+
+    monkeypatch.setattr(runtime_migration, "_write_initial_marker", create_database_before_marker)
+
+    first = migrate_legacy_runtime_data(legacy, paths)
+    second = migrate_legacy_runtime_data(legacy, paths)
+
+    assert first.status == "custom_database_requires_manual_copy"
+    assert second.status == "custom_database_requires_manual_copy"
+    assert creation_blocked
+    assert not paths.state_db_path.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="delete-on-close 清理仅由 Windows 提供保证")
+def test_pending_marker_write_failure_closes_and_deletes_target_reservation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """pending marker 写入失败时必须关闭预约并自动删除空目标。"""
+    from src import runtime_migration
+
+    legacy = tmp_path / "legacy"
+    custom_database = tmp_path / "private" / "custom.db"
+    custom_database.parent.mkdir()
+    custom_database.write_bytes(b"source-kept")
+    _write_custom_legacy_env(legacy, custom_database)
+    paths = RuntimePaths.from_environment(tmp_path / "appdata", tmp_path / "resources")
+    reservation_seen = False
+
+    def fail_marker_write(*_args, **_kwargs) -> bool:
+        nonlocal reservation_seen
+        reservation_seen = paths.state_db_path.exists()
+        return False
+
+    monkeypatch.setattr(runtime_migration, "_write_initial_marker", fail_marker_write)
+
+    result = migrate_legacy_runtime_data(legacy, paths)
+
+    assert result.status == "migration_failed"
+    assert reservation_seen
+    assert not paths.state_db_path.exists()
+    assert not (paths.backups_dir / "migration-state.json").exists()
 
 
 def test_custom_database_path_with_existing_fixed_target_records_conflict(
@@ -620,6 +690,77 @@ def test_windows_sqlite_migration_rejects_temporary_path_replaced_after_backup(
     assert len(temporary_files) == 1
     with sqlite3.connect(temporary_files[0]) as temporary_connection:
         assert temporary_connection.execute("SELECT value FROM records").fetchall() == [("replacement",)]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="仅在 Windows 上验证目标预约独占语义")
+def test_windows_pending_target_reservation_blocks_writes_deletes_and_replace(
+    tmp_path: Path,
+) -> None:
+    """预约句柄存续期间真实 SQLite、写入、删除和替换均不得成功。"""
+    from src import runtime_migration
+
+    target = tmp_path / "state" / "be_water.db"
+    replacement = tmp_path / "replacement.db"
+    replacement.write_bytes(b"replacement")
+    status, handle = runtime_migration._reserve_pending_database_target(target)
+
+    assert status == "acquired"
+    assert handle is not None
+    assert target.exists()
+    try:
+        with pytest.raises(sqlite3.Error):
+            sqlite3.connect(target, timeout=0)
+        with pytest.raises(OSError):
+            target.write_bytes(b"concurrent")
+        with pytest.raises(OSError):
+            target.unlink()
+        with pytest.raises(OSError):
+            os.replace(replacement, target)
+        assert replacement.read_bytes() == b"replacement"
+    finally:
+        assert runtime_migration._close_pending_database_reservation(target, handle)
+    assert not target.exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="仅在 Windows 上验证进程退出自动清理")
+def test_windows_pending_target_reservation_is_deleted_after_abnormal_process_exit(
+    tmp_path: Path,
+) -> None:
+    """持有预约的进程异常退出后，Windows 必须自动关闭句柄并删除预约路径。"""
+    target = tmp_path / "state" / "be_water.db"
+    child_code = "\n".join(
+        [
+            "import os",
+            "import sys",
+            "from pathlib import Path",
+            "from src.runtime_migration import _reserve_pending_database_target",
+            "status, handle = _reserve_pending_database_target(Path(sys.argv[1]))",
+            "print(status, flush=True)",
+            "sys.stdin.read(1)",
+            "os._exit(7)",
+        ]
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-c", child_code, str(target)],
+        cwd=Path(__file__).resolve().parents[1],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert child.stdout is not None
+        assert child.stdout.readline().strip() == "acquired"
+        assert target.exists()
+        assert child.stdin is not None
+        child.stdin.write("x")
+        child.stdin.flush()
+        assert child.wait(timeout=10) == 7
+        assert not target.exists()
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait(timeout=10)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="仅在 Windows 上验证句柄删除权限")

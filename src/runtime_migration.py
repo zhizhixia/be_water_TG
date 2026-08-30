@@ -32,6 +32,72 @@ _CONFLICT_STATUS = "database_destination_conflict"
 _FAILED_STATUS = "migration_failed"
 _DEFAULT_LEGACY_STATE_PATH = "state/be_water.db"
 _MAX_ENV_BYTES = 1024 * 1024
+_RESERVATION_ACQUIRED = "acquired"
+_RESERVATION_EXISTS = "exists"
+_RESERVATION_FAILED = "failed"
+
+
+def _reserve_pending_database_target(target: Path) -> tuple[str, int | None]:
+    """在 Windows 精确目标上创建 delete-on-close 独占预约并返回原生句柄。"""
+    if os.name != "nt":
+        logger.warning("非 Windows 平台无法安全预约自定义数据库固定目标")
+        return _RESERVATION_FAILED, None
+
+    from ctypes import wintypes
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return _RESERVATION_FAILED, None
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    )
+    create_file.restype = wintypes.HANDLE
+    handle = create_file(
+        str(target),
+        0xC0010000,  # GENERIC_READ | GENERIC_WRITE | DELETE
+        0,  # 禁止其他句柄读取、写入或删除，阻断改名和替换。
+        None,
+        1,  # CREATE_NEW
+        0x04000100,  # FILE_FLAG_DELETE_ON_CLOSE | FILE_ATTRIBUTE_TEMPORARY
+        None,
+    )
+    if handle != ctypes.c_void_p(-1).value:
+        return _RESERVATION_ACQUIRED, handle
+
+    error = ctypes.get_last_error()
+    if error in {80, 183}:  # ERROR_FILE_EXISTS | ERROR_ALREADY_EXISTS
+        return _RESERVATION_EXISTS, None
+    logger.warning("自定义数据库固定目标预约失败，错误码：%d", error)
+    return _RESERVATION_FAILED, None
+
+
+def _close_pending_database_reservation(target: Path, handle: int) -> bool:
+    """关闭 Windows 独占预约句柄，并确认 delete-on-close 未留下预约文件。"""
+    if os.name != "nt":
+        return False
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    close_handle = kernel32.CloseHandle
+    close_handle.argtypes = (wintypes.HANDLE,)
+    close_handle.restype = wintypes.BOOL
+    if not close_handle(wintypes.HANDLE(handle)):
+        logger.warning("自定义数据库固定目标预约句柄关闭失败，错误码：%d", ctypes.get_last_error())
+        return False
+    try:
+        return not target.exists()
+    except OSError:
+        return False
 
 
 def _create_private_temporary(directory: Path, name: str) -> tuple[Path, int]:
@@ -644,11 +710,26 @@ def _block_custom_database(
         if not migrated:
             return MigrationResult((), (), _FAILED_STATUS)
         return MigrationResult(("env",), (), "ready")
-    status = _CONFLICT_STATUS if paths.state_db_path.exists() else _PENDING_STATUS
-    if not _write_initial_marker(paths, status, source_digest):
+    reservation_status, reservation_handle = _reserve_pending_database_target(paths.state_db_path)
+    if reservation_status == _RESERVATION_EXISTS:
+        if not _write_initial_marker(paths, _CONFLICT_STATUS, source_digest):
+            return MigrationResult((), (), _FAILED_STATUS)
+        logger.info("旧运行数据迁移阻断：%s", _CONFLICT_STATUS)
+        return MigrationResult((), (), _CONFLICT_STATUS)
+    if reservation_status != _RESERVATION_ACQUIRED or reservation_handle is None:
         return MigrationResult((), (), _FAILED_STATUS)
-    logger.info("旧运行数据迁移阻断：%s", status)
-    return MigrationResult((), (), status)
+
+    marker_committed = False
+    try:
+        marker_committed = _write_initial_marker(paths, _PENDING_STATUS, source_digest)
+    finally:
+        reservation_closed = _close_pending_database_reservation(
+            paths.state_db_path, reservation_handle
+        )
+    if not marker_committed or not reservation_closed:
+        return MigrationResult((), (), _FAILED_STATUS)
+    logger.info("旧运行数据迁移阻断：%s", _PENDING_STATUS)
+    return MigrationResult((), (), _PENDING_STATUS)
 
 
 def migrate_legacy_runtime_data(legacy_dir: Path | str, paths: RuntimePaths) -> MigrationResult:
