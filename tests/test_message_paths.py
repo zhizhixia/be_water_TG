@@ -192,3 +192,236 @@ def test_open_handle_blocks_replace_and_reads_original_file(
     assert loaded.text == "原始内容"
     assert replace_errors
     assert target.read_text(encoding="utf-8") == "原始内容"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="需要真实 Windows 文件句柄")
+def test_retries_final_file_close_failure_and_releases_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """最终文件句柄首次关闭失败时重试，读取结果仍可用且文件可删除。"""
+    paths = make_paths(tmp_path)
+    nested = paths.messages_dir / "nested"
+    nested.mkdir()
+    target = nested / "retry.txt"
+    target.write_text("可删除内容", encoding="utf-8")
+    original_open = message_paths._win_open
+    original_close = message_paths._CloseHandle
+    opened: list[int] = []
+    close_calls: list[int] = []
+    really_closed: set[int] = set()
+
+    def recording_open(path: Path, *, directory: bool) -> int:
+        handle = original_open(path, directory=directory)
+        opened.append(handle)
+        return handle
+
+    def fail_first_file_close(handle: int) -> bool:
+        close_calls.append(handle)
+        if handle == opened[-1] and close_calls.count(handle) == 1:
+            return False
+        closed = bool(original_close(handle))
+        if closed:
+            really_closed.add(handle)
+        return closed
+
+    monkeypatch.setattr(message_paths, "_win_open", recording_open)
+    monkeypatch.setattr(message_paths, "_CloseHandle", fail_first_file_close)
+
+    try:
+        loaded = read_message_text("nested/retry.txt", paths)
+
+        assert loaded.text == "可删除内容"
+        assert close_calls == [opened[2], opened[1], opened[0], opened[2]]
+        assert really_closed == set(opened)
+        target.unlink()
+        assert not target.exists()
+    finally:
+        for handle in reversed(opened):
+            if handle not in really_closed:
+                original_close(handle)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="需要真实 Windows 文件句柄")
+def test_retries_every_failed_handle_even_after_another_retry_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """多个句柄首次失败时全部重试，单个永久失败不阻断其余重试。"""
+    paths = make_paths(tmp_path)
+    nested = paths.messages_dir / "nested"
+    nested.mkdir()
+    target = nested / "all-handles.txt"
+    target.write_text("多句柄内容", encoding="utf-8")
+    original_open = message_paths._win_open
+    original_close = message_paths._CloseHandle
+    opened: list[int] = []
+    close_calls: list[int] = []
+    really_closed: set[int] = set()
+
+    def recording_open(path: Path, *, directory: bool) -> int:
+        handle = original_open(path, directory=directory)
+        opened.append(handle)
+        return handle
+
+    def fail_first_close_and_keep_file_open(handle: int) -> bool:
+        close_calls.append(handle)
+        if close_calls.count(handle) == 1 or handle == opened[-1]:
+            return False
+        closed = bool(original_close(handle))
+        if closed:
+            really_closed.add(handle)
+        return closed
+
+    monkeypatch.setattr(message_paths, "_win_open", recording_open)
+    monkeypatch.setattr(message_paths, "_CloseHandle", fail_first_close_and_keep_file_open)
+
+    try:
+        with pytest.raises(MessagePathError, match="^消息文件句柄清理失败$"):
+            read_message_text("nested/all-handles.txt", paths)
+
+        assert close_calls == [*reversed(opened), *reversed(opened)]
+        assert really_closed == {opened[0], opened[1]}
+    finally:
+        for handle in reversed(opened):
+            if handle not in really_closed:
+                original_close(handle)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="需要真实 Windows 文件句柄")
+def test_permanent_file_close_failure_raises_fixed_safe_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """最终文件句柄永久关闭失败时不返回内容，仅抛固定安全错误。"""
+    paths = make_paths(tmp_path)
+    target = paths.messages_dir / "permanent.txt"
+    secret = "永久失败秘密"
+    target.write_text(secret, encoding="utf-8")
+    original_open = message_paths._win_open
+    original_close = message_paths._CloseHandle
+    opened: list[int] = []
+    close_calls: list[int] = []
+    really_closed: set[int] = set()
+
+    def recording_open(path: Path, *, directory: bool) -> int:
+        handle = original_open(path, directory=directory)
+        opened.append(handle)
+        return handle
+
+    def never_close_file(handle: int) -> bool:
+        close_calls.append(handle)
+        if handle == opened[-1]:
+            return False
+        closed = bool(original_close(handle))
+        if closed:
+            really_closed.add(handle)
+        return closed
+
+    monkeypatch.setattr(message_paths, "_win_open", recording_open)
+    monkeypatch.setattr(message_paths, "_CloseHandle", never_close_file)
+
+    try:
+        with pytest.raises(MessagePathError) as caught:
+            read_message_text("permanent.txt", paths)
+
+        assert str(caught.value) == "消息文件句柄清理失败"
+        assert secret not in str(caught.value)
+        assert str(paths.messages_dir) not in str(caught.value)
+        assert close_calls.count(opened[-1]) == 2
+        assert really_closed == {opened[0]}
+    finally:
+        for handle in reversed(opened):
+            if handle not in really_closed:
+                original_close(handle)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="需要真实 Windows 文件句柄")
+def test_read_failure_still_retries_and_closes_every_handle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """读取失败时仍重试并关闭全部句柄，且保留固定安全读取错误。"""
+    paths = make_paths(tmp_path)
+    nested = paths.messages_dir / "nested"
+    nested.mkdir()
+    target = nested / "read-failure.txt"
+    secret = "读取失败秘密"
+    target.write_text(secret, encoding="utf-8")
+    original_open = message_paths._win_open
+    original_close = message_paths._CloseHandle
+    opened: list[int] = []
+    close_calls: list[int] = []
+    really_closed: set[int] = set()
+
+    def recording_open(path: Path, *, directory: bool) -> int:
+        handle = original_open(path, directory=directory)
+        opened.append(handle)
+        return handle
+
+    def fail_each_first_close(handle: int) -> bool:
+        close_calls.append(handle)
+        if close_calls.count(handle) == 1:
+            return False
+        closed = bool(original_close(handle))
+        if closed:
+            really_closed.add(handle)
+        return closed
+
+    monkeypatch.setattr(message_paths, "_win_open", recording_open)
+    monkeypatch.setattr(message_paths, "_ReadFile", lambda *args: False)
+    monkeypatch.setattr(message_paths, "_CloseHandle", fail_each_first_close)
+
+    try:
+        with pytest.raises(MessagePathError) as caught:
+            read_message_text("nested/read-failure.txt", paths)
+
+        assert str(caught.value) == "消息文件读取失败"
+        assert secret not in str(caught.value)
+        assert str(paths.messages_dir) not in str(caught.value)
+        assert close_calls == [*reversed(opened), *reversed(opened)]
+        assert really_closed == set(opened)
+        target.unlink()
+        assert not target.exists()
+    finally:
+        for handle in reversed(opened):
+            if handle not in really_closed:
+                original_close(handle)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="需要真实 Windows 文件句柄")
+def test_cleanup_failure_does_not_swallow_keyboard_interrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """不可恢复清理失败不得把 KeyboardInterrupt 替换为普通业务异常。"""
+    paths = make_paths(tmp_path)
+    target = paths.messages_dir / "interrupt.txt"
+    target.write_text("中断内容", encoding="utf-8")
+    original_open = message_paths._win_open
+    original_close = message_paths._CloseHandle
+    opened: list[int] = []
+    really_closed: set[int] = set()
+
+    def recording_open(path: Path, *, directory: bool) -> int:
+        handle = original_open(path, directory=directory)
+        opened.append(handle)
+        return handle
+
+    def never_close_file(handle: int) -> bool:
+        if handle == opened[-1]:
+            return False
+        closed = bool(original_close(handle))
+        if closed:
+            really_closed.add(handle)
+        return closed
+
+    def interrupt_read(*args) -> bool:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(message_paths, "_win_open", recording_open)
+    monkeypatch.setattr(message_paths, "_ReadFile", interrupt_read)
+    monkeypatch.setattr(message_paths, "_CloseHandle", never_close_file)
+
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            read_message_text("interrupt.txt", paths)
+    finally:
+        for handle in reversed(opened):
+            if handle not in really_closed:
+                original_close(handle)

@@ -233,9 +233,24 @@ def _win_info(handle: int) -> "_BY_HANDLE_FILE_INFORMATION":
     return info
 
 
+def _close_windows_handles(handles: list[int]) -> None:
+    """逆序关闭全部 Windows 句柄，并重试首次关闭失败的句柄。"""
+    failed: list[int] = []
+    for handle in reversed(handles):
+        if not _CloseHandle(handle):
+            failed.append(handle)
+    retry_failed = False
+    for handle in failed:
+        if not _CloseHandle(handle):
+            retry_failed = True
+    if retry_failed:
+        raise MessagePathError("消息文件句柄清理失败")
+
+
 def _read_beneath_windows(root: Path, parts: tuple[str, ...], max_bytes: int) -> bytes:
     """持有从可信根到文件的全部 Windows 句柄并从最终句柄读取。"""
     handles: list[int] = []
+    primary_error: BaseException | None = None
     try:
         current = root
         root_handle = _win_open(current, directory=True)
@@ -286,6 +301,16 @@ def _read_beneath_windows(root: Path, parts: tuple[str, ...], max_bytes: int) ->
         if len(data) > max_bytes:
             raise MessagePathError("消息文件超过大小限制")
         return data
+    except BaseException as error:
+        primary_error = error
+        raise
     finally:
-        for handle in reversed(handles):
-            _CloseHandle(handle)
+        try:
+            _close_windows_handles(handles)
+        except MessagePathError as cleanup_error:
+            if isinstance(primary_error, (KeyboardInterrupt, SystemExit)):
+                pass
+            elif primary_error is not None:
+                raise cleanup_error from primary_error
+            else:
+                raise
