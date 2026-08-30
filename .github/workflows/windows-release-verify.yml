@@ -56,7 +56,21 @@ jobs:
 
       # 4) 运行完整测试套件（fake/mock，不连真实网络）
       - name: 运行测试套件
-        run: uv run pytest tests -v
+        shell: bash
+        run: uv run pytest tests -v --tb=short
+
+      # 4b) 失败时将失败详情写入步骤摘要，便于在无完整日志访问权限时定位
+      - name: 输出测试失败详情到摘要
+        if: failure()
+        shell: bash
+        run: |
+          uv run pytest tests -x --tb=short -q > pytest-diagnostic.txt 2>&1 || true
+          {
+            echo "## pytest 失败详情"
+            echo '```'
+            tail -150 pytest-diagnostic.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # 5) 构建 Windows 发布包（内置严格 smoke：隔离 LOCALAPPDATA + 中文空格路径
       #    启动 EXE、校验 /api/health 三字段、静态资源 200、运行数据隔离、单实例、
