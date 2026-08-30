@@ -1,0 +1,101 @@
+# Windows v1.0.1 标签发布验证流水线
+# ---------------------------------------------------------------------------
+# 触发条件：
+#   1) push 到 v* 标签  → 完整验证链路，构建通过后创建人工审核的 Draft Release
+#   2) workflow_dispatch → 手动触发，走完整构建 + smoke + 独立审计链路
+#   3) push 到 main 分支 → 仅跑测试回归（构建/发布步骤被条件跳过，避免浪费资源）
+#
+# 环境约定：
+#   - Python 锁定 3.11（pyproject requires-python >=3.11,<3.12）
+#   - 依赖来自 pyproject.toml + uv.lock（无 requirements.txt），分组 runtime/dev/build
+#   - 安装用 `uv sync --all-groups` 一次性装全部分组
+#
+# 安全约定：
+#   - 绝不使用真实凭据 / secret；smoke 使用隔离 LOCALAPPDATA（build_windows.py 已处理）
+#   - CI 产物不保留 .env / *.session / db；verify_release.py 会审计归档不含敏感内容
+# ---------------------------------------------------------------------------
+name: windows-release-verify
+
+on:
+  push:
+    tags:
+      - "v*"      # 版本标签触发正式验证 + Draft Release
+    branches:
+      - main      # main 分支推送仅跑测试回归
+  workflow_dispatch:   # 手动触发，走完整构建链路
+
+# 创建/上传 Release 需要 contents 写权限；其余步骤无额外权限要求。
+permissions:
+  contents: write
+
+jobs:
+  # 单一作业：Windows 环境完成 测试 → 构建(含内置 smoke) → 独立审计 → 草稿发布
+  build-and-verify:
+    name: 测试、构建与发布验证 (Windows / Python 3.11)
+    runs-on: windows-latest
+    steps:
+      # 1) 检出代码：fetch-depth 0 拉取完整历史与标签，供版本与变更推断使用
+      - name: 检出代码（含完整历史与标签）
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # 2) 安装 uv 并锁定 Python 3.11。
+      #    使用 astral-sh/setup-uv@v6 当前主流稳定主版本标签（v5 亦可，语义兼容）。
+      #    若网络受限可退化为 runner 自带 Python + `pip install uv`，但 runner 自带
+      #    为 3.13，不满足 <3.12 约束，故此处由 setup-uv 托管安装 3.11。
+      - name: 安装 uv 并准备 Python 3.11
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.11"
+          enable-cache: true
+
+      # 3) 安装全部依赖分组（runtime / dev / build）
+      - name: 同步全部依赖分组
+        run: uv sync --all-groups
+
+      # 4) 运行完整测试套件（fake/mock，不连真实网络）
+      - name: 运行测试套件
+        run: uv run pytest tests -v
+
+      # 5) 构建 Windows 发布包（内置严格 smoke：隔离 LOCALAPPDATA + 中文空格路径
+      #    启动 EXE、校验 /api/health 三字段、静态资源 200、运行数据隔离、单实例、
+      #    端口释放；产出 dist/BeWaterTG/、dist/BeWaterTG-win64.zip、dist/SHA256SUMS.txt）
+      #    仅标签 / 手动触发时执行，main 分支推送跳过（只跑测试）。
+      - name: 构建 Windows 发布包（含内置 smoke）
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        run: uv run python scripts/build_windows.py
+
+      # 6) 独立审计发布归档（与构建脚本解耦，二次校验归档成员与敏感内容）
+      - name: 独立审计发布归档
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        run: uv run python scripts/verify_release.py dist/BeWaterTG-win64.zip
+
+      # 7) 读取 SHA-256 校验值，供 Draft Release 正文引用
+      - name: 读取 SHA-256 校验值
+        if: github.ref_type == 'tag'
+        id: checksum
+        shell: bash
+        run: echo "sha256=$(cat dist/SHA256SUMS.txt)" >> "$GITHUB_OUTPUT"
+
+      # 8) 标签触发时创建 Draft Release：draft:true 表示不自动发布，
+      #    由人工验证构建与 smoke 结果后再手动公开。
+      - name: 创建草稿 Release（人工验证后发布）
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v3
+        with:
+          draft: true
+          files: |
+            dist/BeWaterTG-win64.zip
+            dist/SHA256SUMS.txt
+          body: |
+            # Be Water TG v1.0.1 发布验证产物
+
+            **SHA-256 校验（详见附件 dist/SHA256SUMS.txt）：**
+
+            ```
+            ${{ steps.checksum.outputs.sha256 }}
+            ```
+
+            本 Release 为自动创建的**草稿（Draft）**，尚未公开。
+            请人工验证构建与 smoke 结果后，再手动发布。
