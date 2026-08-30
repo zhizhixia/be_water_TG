@@ -15,6 +15,12 @@ from urllib.parse import urlparse
 from urllib.request import urlopen
 from zipfile import ZipFile
 
+# 强制 UTF-8 输出：CI 英文 Windows（默认 cp1252）打印中文会抛
+# UnicodeEncodeError，导致审计/烟雾脚本在发布流水线中失败。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 
 class ReleaseAuditError(ValueError):
     """发布归档包含敏感内容或缺少必要文件。"""

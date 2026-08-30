@@ -10,6 +10,12 @@ from pathlib import Path
 from typing import Callable
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
+# 强制 UTF-8 输出：CI 英文 Windows（默认 cp1252）打印中文会抛
+# UnicodeEncodeError，导致构建脚本在发布流水线中失败。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stderr.reconfigure(encoding="utf-8")
+
 RUNTIME_RESOURCES = (
     ("templates", "templates"),
     ("static", "static"),
