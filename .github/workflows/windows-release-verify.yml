@@ -81,7 +81,25 @@ jobs:
       #    仅标签 / 手动触发时执行，main 分支推送跳过（只跑测试）。
       - name: 构建 Windows 发布包（含内置 smoke）
         if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
-        run: uv run python scripts/build_windows.py
+        shell: bash
+        run: |
+          uv run python scripts/build_windows.py > build-output.txt 2>&1
+          echo "build exit code: $?"
+
+      # 5b) 构建失败时输出详情，便于定位环境差异
+      - name: 输出构建失败详情
+        if: failure()
+        shell: bash
+        run: |
+          grep -iE "error|failed|traceback|exception|Traceback|ERROR|FAILED" build-output.txt | head -40 | while IFS= read -r line; do
+            echo "::error title=build::${line}"
+          done
+          {
+            echo "## 构建失败详情"
+            echo '```'
+            tail -200 build-output.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       # 6) 独立审计发布归档（与构建脚本解耦，二次校验归档成员与敏感内容）
       - name: 独立审计发布归档
