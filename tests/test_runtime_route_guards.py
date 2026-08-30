@@ -192,3 +192,33 @@ def test_opening_web_during_pending_does_not_make_next_migration_ready(tmp_path:
     assert second.status == "custom_database_requires_manual_copy"
     assert not paths.state_db_path.exists()
     assert not paths.env_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("migration_status", "configured"),
+    [
+        ("custom_database_requires_manual_copy", False),
+        ("database_destination_conflict", False),
+        ("migration_failed", False),
+        ("ready", False),
+    ],
+)
+def test_static_assets_are_public_in_blocked_and_unconfigured_states(
+    tmp_path: Path,
+    migration_status: str,
+    configured: bool,
+) -> None:
+    """静态资源只读且公开，任何运行状态都不得被门禁拦截返回 409。"""
+    paths = RuntimePaths(tmp_path / "resources", tmp_path / "runtime")
+    paths.ensure_directories()
+    app = create_app(
+        runtime_paths=paths,
+        runtime_state=_state(migration_status, configured),
+    )
+
+    response = app.test_client().get("/static/css/style.css")
+
+    assert response.status_code == 200
+    assert response.data
+    assert not paths.env_path.exists()
+    assert not paths.state_db_path.exists()

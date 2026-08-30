@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 routes = Blueprint("web", __name__)
 
 _RUNTIME_BLOCKED_ERROR = "应用尚未完成运行数据迁移或配置"
-_PUBLIC_ENDPOINTS = {"web.index", "web.api_events", "be_water_health"}
+_PUBLIC_ENDPOINTS = {"web.index", "web.api_events", "be_water_health", "static"}
 _CONFIG_ENDPOINTS = {"web.api_config_get", "web.api_config_save"}
 
 
