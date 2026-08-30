@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 from src.group_identity import GroupIdentity
+from src.config import Settings
+from src.runtime_paths import RuntimePaths
 from src.sender import PublisherTrust, TelegramSender
 
 
@@ -28,6 +30,30 @@ class FakeClient:
     async def send_message(self, peer_id, text, **kwargs):
         self.calls.append(("send_message", peer_id, text, kwargs))
         return SimpleNamespace(id=88)
+
+
+@pytest.mark.asyncio
+async def test_sender_uses_runtime_session_path(monkeypatch, tmp_path) -> None:
+    """真实 Telegram 客户端接收集中运行目录中的 session 文件路径。"""
+    created: list[str] = []
+
+    class SessionClient:
+        def __init__(self, session, *_args, **_kwargs) -> None:
+            created.append(session)
+
+        async def connect(self) -> None:
+            return None
+
+        async def is_user_authorized(self) -> bool:
+            return True
+
+    monkeypatch.setattr("src.sender.TelegramClient", SessionClient)
+    paths = RuntimePaths.from_environment(tmp_path / "appdata", tmp_path / "resources")
+    settings = Settings(api_id=1, api_hash="x" * 32, phone="+1", target_groups=["https://t.me/group"])
+
+    await TelegramSender(settings, runtime_paths=paths).start()
+
+    assert created == [str(paths.sender_session_path)]
 
 
 @pytest.mark.asyncio

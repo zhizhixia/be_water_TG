@@ -10,6 +10,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from src.group_parser import normalize_group_link
+from src.runtime_paths import RuntimePaths
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +209,7 @@ def _parse_legacy_message_file(part: str) -> tuple[str, str]:
     return "", ""
 
 
-def load_settings() -> Settings:
+def load_settings(runtime_paths: RuntimePaths | None = None) -> Settings:
     """从 .env 文件加载配置并校验。
 
     Returns:
@@ -217,7 +218,8 @@ def load_settings() -> Settings:
     Raises:
         ValueError: 配置缺失或无效时抛出。
     """
-    load_dotenv()
+    paths = runtime_paths or RuntimePaths.from_environment()
+    load_dotenv(dotenv_path=paths.env_path)
 
     api_id_str = os.getenv("API_ID")
     api_hash = os.getenv("API_HASH")
@@ -324,7 +326,7 @@ def load_settings() -> Settings:
     discussion_reply_pct = int(os.getenv("DISCUSSION_REPLY_PCT", "15"))
     reply_delay_min = int(os.getenv("REPLY_DELAY_MIN", "20"))
     reply_delay_max = int(os.getenv("REPLY_DELAY_MAX", "90"))
-    state_db_path = os.getenv("STATE_DB_PATH", "state/be_water.db")
+    state_db_path = os.getenv("STATE_DB_PATH", str(paths.state_db_path))
     lottery_enabled = os.getenv("LOTTERY_ENABLED", "true").lower() in ("true", "1", "yes")
     lottery_scan_interval_minutes = int(os.getenv("LOTTERY_SCAN_INTERVAL_MINUTES", "60"))
     daily_pinned_lottery_scan_enabled = os.getenv("DAILY_PINNED_LOTTERY_SCAN_ENABLED", "true").lower() in ("true", "1", "yes")
@@ -391,7 +393,11 @@ def load_settings() -> Settings:
     )
 
 
-def save_settings(settings: Settings, path: str | None = None) -> None:
+def save_settings(
+    settings: Settings,
+    path: str | None = None,
+    runtime_paths: RuntimePaths | None = None,
+) -> None:
     """将 Settings 持久化到 .env 文件。
 
     Args:
@@ -399,7 +405,7 @@ def save_settings(settings: Settings, path: str | None = None) -> None:
         path: .env 文件路径，默认为项目根目录下的 .env。
     """
     if path is None:
-        path = str(Path(__file__).resolve().parent.parent / ".env")
+        path = str((runtime_paths or RuntimePaths.from_environment()).env_path)
 
     # 构建新值字典
     new_values: dict[str, str] = {}
@@ -454,6 +460,7 @@ def save_settings(settings: Settings, path: str | None = None) -> None:
     new_values["LOTTERY_ACTION_GAP_MAX_SECONDS"] = str(settings.lottery_action_gap_max_seconds)
 
     env_path = Path(path)
+    env_path.parent.mkdir(parents=True, exist_ok=True)
     lines: list[str] = []
 
     # 读取现有 .env 文件（如果存在）

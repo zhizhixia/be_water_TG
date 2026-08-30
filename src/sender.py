@@ -11,6 +11,7 @@ from telethon.errors import FloodWaitError
 from src.config import Settings
 from src.group_identity import GroupIdentity
 from src.lottery_models import ButtonSnapshot, MessageSnapshot
+from src.runtime_paths import RuntimePaths
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +28,18 @@ class PublisherTrust(StrEnum):
 class TelegramSender:
     """Telegram 消息发送器，管理客户端连接和消息发送。"""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        runtime_paths: RuntimePaths | None = None,
+    ) -> None:
         """初始化发送器。
 
         Args:
             settings: 项目配置。
         """
         self._settings = settings
+        self._runtime_paths = runtime_paths
         self._client: TelegramClient | None = None
 
     async def start(
@@ -60,8 +66,10 @@ class TelegramSender:
                 self._settings.proxy_port,
             )
 
+        session_path = (self._runtime_paths or RuntimePaths.from_environment()).sender_session_path
+        session_path.parent.mkdir(parents=True, exist_ok=True)
         self._client = TelegramClient(
-            "sender_session",
+            str(session_path),
             self._settings.api_id,
             self._settings.api_hash,
             proxy=proxy,
