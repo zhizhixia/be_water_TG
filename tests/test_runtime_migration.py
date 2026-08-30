@@ -196,6 +196,125 @@ def test_custom_database_path_with_existing_fixed_target_records_conflict(
     assert marker["status"] == "database_destination_conflict"
 
 
+def test_custom_database_path_with_fixed_target_directory_records_permanent_conflict(
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    """固定数据库目标被目录占用时，连续迁移必须保持同一永久冲突标记。"""
+    legacy = tmp_path / "legacy"
+    custom_database = tmp_path / "private" / "custom.db"
+    custom_database.parent.mkdir()
+    custom_database.write_bytes(b"source-kept")
+    _write_custom_legacy_env(legacy, custom_database)
+    paths = RuntimePaths.from_environment(tmp_path / "appdata", tmp_path / "resources")
+    paths.state_db_path.mkdir(parents=True)
+
+    first = migrate_legacy_runtime_data(legacy, paths)
+    marker_path = paths.backups_dir / "migration-state.json"
+    marker_before = marker_path.read_bytes()
+    second = migrate_legacy_runtime_data(legacy, paths)
+
+    assert first.status == "database_destination_conflict"
+    assert second.status == "database_destination_conflict"
+    assert marker_path.read_bytes() == marker_before
+    assert json.loads(marker_before)["status"] == "database_destination_conflict"
+    assert paths.state_db_path.is_dir()
+    assert not paths.env_path.exists()
+    assert str(paths.state_db_path) not in caplog.text
+
+
+@pytest.mark.skipif(os.name != "nt", reason="仅在 Windows 上验证悬空链接目标占用")
+def test_custom_database_path_with_dangling_fixed_target_symlink_records_permanent_conflict(
+    tmp_path: Path,
+) -> None:
+    """悬空链接占用固定目标命名空间时，连续迁移必须保持永久冲突标记。"""
+    legacy = tmp_path / "legacy"
+    custom_database = tmp_path / "private" / "custom.db"
+    custom_database.parent.mkdir()
+    custom_database.write_bytes(b"source-kept")
+    _write_custom_legacy_env(legacy, custom_database)
+    paths = RuntimePaths.from_environment(tmp_path / "appdata", tmp_path / "resources")
+    paths.state_db_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        paths.state_db_path.symlink_to(tmp_path / "missing-database.db")
+    except OSError as error:
+        pytest.skip(f"当前权限无法创建悬空符号链接：{type(error).__name__}")
+
+    first = migrate_legacy_runtime_data(legacy, paths)
+    marker_path = paths.backups_dir / "migration-state.json"
+    marker_before = marker_path.read_bytes()
+    second = migrate_legacy_runtime_data(legacy, paths)
+
+    assert first.status == "database_destination_conflict"
+    assert second.status == "database_destination_conflict"
+    assert marker_path.read_bytes() == marker_before
+    assert paths.state_db_path.is_symlink()
+    assert not paths.state_db_path.exists()
+
+
+def test_reservation_access_denied_with_exact_namespace_entry_is_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """CreateFileW 返回访问拒绝后，lstat 可见精确条目时必须判为目标已占用。"""
+    from src import runtime_migration
+
+    class FailingCreateFile:
+        def __call__(self, *_args):
+            return runtime_migration.ctypes.c_void_p(-1).value
+
+    class FakeKernel32:
+        CreateFileW = FailingCreateFile()
+
+    target = tmp_path / "state" / "be_water.db"
+    lstat_targets: list[Path] = []
+
+    def fake_lstat(candidate: Path):
+        lstat_targets.append(candidate)
+        return os.stat_result((0,) * 10)
+
+    monkeypatch.setattr(runtime_migration.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32())
+    monkeypatch.setattr(runtime_migration.ctypes, "get_last_error", lambda: 5)
+    monkeypatch.setattr(runtime_migration.os, "lstat", fake_lstat)
+
+    status, handle = runtime_migration._reserve_pending_database_target(target)
+
+    assert status == "exists"
+    assert handle is None
+    assert lstat_targets == [target]
+
+
+@pytest.mark.parametrize("lstat_error", [FileNotFoundError(), PermissionError()])
+def test_reservation_access_denied_without_confirmed_namespace_entry_still_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    lstat_error: OSError,
+) -> None:
+    """任意访问拒绝不能直接视为冲突，lstat 未确认条目时仍必须返回预约失败。"""
+    from src import runtime_migration
+
+    class FailingCreateFile:
+        def __call__(self, *_args):
+            return runtime_migration.ctypes.c_void_p(-1).value
+
+    class FakeKernel32:
+        CreateFileW = FailingCreateFile()
+
+    target = tmp_path / "state" / "be_water.db"
+
+    def failing_lstat(_candidate: Path):
+        raise lstat_error
+
+    monkeypatch.setattr(runtime_migration.ctypes, "WinDLL", lambda *_args, **_kwargs: FakeKernel32())
+    monkeypatch.setattr(runtime_migration.ctypes, "get_last_error", lambda: 5)
+    monkeypatch.setattr(runtime_migration.os, "lstat", failing_lstat)
+
+    status, handle = runtime_migration._reserve_pending_database_target(target)
+
+    assert status == "failed"
+    assert handle is None
+
+
 def test_pending_custom_database_recovers_only_from_valid_fixed_database(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

@@ -77,6 +77,14 @@ def _reserve_pending_database_target(target: Path) -> tuple[str, int | None]:
     error = ctypes.get_last_error()
     if error in {80, 183}:  # ERROR_FILE_EXISTS | ERROR_ALREADY_EXISTS
         return _RESERVATION_EXISTS, None
+    try:
+        os.lstat(target)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+    else:
+        return _RESERVATION_EXISTS, None
     logger.warning("自定义数据库固定目标预约失败，错误码：%d", error)
     return _RESERVATION_FAILED, None
 
