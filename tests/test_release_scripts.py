@@ -162,7 +162,17 @@ def test_assert_runtime_data_isolated_rejects_missing_subdir(tmp_path: Path) -> 
         verify.assert_runtime_data_isolated(data_dir, program_dir, {"BeWaterTG.exe"})
 
 
-@pytest.mark.parametrize("entry", ["be_water.log", "be_water.db", "sender_session.session"])
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "be_water.log",
+        "be_water.db",
+        "be_water.db-journal",
+        "state.sqlite-journal",
+        "state.sqlite3-journal",
+        "sender_session.session",
+    ],
+)
 def test_assert_runtime_data_isolated_rejects_program_dir_data_file(
     tmp_path: Path, entry: str
 ) -> None:

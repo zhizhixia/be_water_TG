@@ -50,8 +50,15 @@ _FORBIDDEN_PROGRAM_DIR_SUFFIXES = (
     ".db",
     ".db-wal",
     ".db-shm",
+    ".db-journal",
     ".sqlite",
+    ".sqlite-wal",
+    ".sqlite-shm",
+    ".sqlite-journal",
     ".sqlite3",
+    ".sqlite3-wal",
+    ".sqlite3-shm",
+    ".sqlite3-journal",
     ".log",
     ".session",
 )
@@ -61,6 +68,8 @@ def _normalise(member: str) -> PurePosixPath:
     """将 ZIP 条目统一为大小写无关的 POSIX 路径。"""
     if "\\" in member:
         raise ReleaseAuditError(f"发布包条目不能使用反斜杠: {member}")
+    if ":" in member:
+        raise ReleaseAuditError(f"发布包条目不能包含冒号: {member}")
     path = PurePosixPath(member)
     if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
         raise ReleaseAuditError(f"发布包条目路径无效: {member}")
@@ -82,12 +91,16 @@ def _is_forbidden(path: PurePosixPath) -> bool:
             ".db",
             ".db-wal",
             ".db-shm",
+            ".db-journal",
             ".sqlite",
             ".sqlite-wal",
             ".sqlite-shm",
+            ".sqlite-journal",
             ".sqlite3",
             ".sqlite3-wal",
             ".sqlite3-shm",
+            ".sqlite3-journal",
+            ".log",
         )
     )
 

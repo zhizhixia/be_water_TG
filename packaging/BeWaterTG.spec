@@ -34,7 +34,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,
     name="BeWaterTG",
     # 显式固定 onedir 内部目录，稳定资源目录解析（templates/static 位于 _internal 下）。
     contents_directory="_internal",

@@ -72,6 +72,11 @@ def test_audit_release_zip_requires_the_exact_release_archive_name(tmp_path: Pat
         "BeWaterTG/.git/config",
         r"BeWaterTG\\nested\\secret.env",
         "BeWaterTG/nested/.env.production",
+        "BeWaterTG/runtime.log",
+        "BeWaterTG/data/be_water.db-journal",
+        "BeWaterTG/cache/state.sqlite-journal",
+        "BeWaterTG/cache/state.sqlite3-journal",
+        "BeWaterTG/data/secret.txt:stream",
     ],
 )
 def test_audit_release_zip_rejects_sensitive_files_and_directories_in_any_path_form(
