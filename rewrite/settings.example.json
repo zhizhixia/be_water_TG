@@ -1,0 +1,18 @@
+{
+  "api_id": 0,
+  "api_hash": "",
+  "phone": "",
+  "groups": [],
+  "ai_enabled": false,
+  "ai_consent": false,
+  "ai_api_key": "",
+  "ai_base_url": "https://api.deepseek.com/v1",
+  "ai_model": "deepseek-chat",
+  "daily_limit": 30,
+  "idle_threshold_minutes": 10,
+  "question_reply_pct": 70,
+  "discussion_reply_pct": 15,
+  "reply_delay_min": 20,
+  "reply_delay_max": 90,
+  "schedule_enabled": false
+}

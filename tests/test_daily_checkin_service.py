@@ -101,3 +101,11 @@ async def test_failed_checkin_is_once_only_and_exposes_normal_participation_gate
     assert await service.attempt(1, "1") == "ALREADY_ATTEMPTED"
     assert service.allows_normal_participation(1) is False
     assert service.allows_lottery(1) is True
+
+
+def test_persisted_failed_checkin_blocks_after_restart() -> None:
+    """进程重启后仍从持久状态恢复普通参与门禁。"""
+    store = Store()
+    store.daily_task_status = lambda *_args: "FAILED"
+    service = DailyCheckinService(store, Sender(), Clock(), 3, State())
+    assert service.allows_normal_participation(1) is False

@@ -1,0 +1,487 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Be Water · 群组参与</title>
+    <link rel="stylesheet" href="/static/app.css" />
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <aside class="sidebar">
+      <a class="brand" href="/">Be Water<span>群组参与</span></a>
+      <nav aria-label="主导航">
+        <button data-page="overview" class="selected">运行概览</button>
+        <button data-page="groups">授权群与任务</button>
+        <button data-page="chat">普通参与</button>
+        <button data-page="lottery">签到与抽奖</button>
+        <button data-page="content">AI 与消息库</button>
+        <button data-page="audit">安全与审计</button>
+        <button data-page="settings">连接与设置</button>
+      </nav>
+      <div class="mobile-navigation">
+        <label for="mobile-page">页面</label>
+        <select id="mobile-page" aria-label="选择页面">
+          <option value="overview">运行概览</option>
+          <option value="groups">授权群与任务</option>
+          <option value="chat">普通参与</option>
+          <option value="lottery">签到与抽奖</option>
+          <option value="content">AI 与消息库</option>
+          <option value="audit">安全与审计</option>
+          <option value="settings">连接与设置</option>
+        </select>
+      </div>
+      <div class="sidebar-foot">
+        <span id="version">新版控制台</span><small>仅对明确许可的群运行</small>
+      </div>
+    </aside>
+    <main>
+      <div class="workspace-bar">
+        <span>本机工作区</span
+        ><span id="connection" class="muted">页面连接中</span>
+      </div>
+      <div class="runtime-summary">
+        <header class="topbar">
+          <div class="runtime-state">
+            <div class="state-symbol">
+              <span class="dot" id="state-dot"></span>
+            </div>
+            <div>
+              <span class="state-caption">执行器</span
+              ><strong id="state">正在读取状态</strong>
+              <p id="runtime-description">正在读取后台状态。</p>
+            </div>
+          </div>
+          <div class="actions">
+            <button id="start" class="primary" data-control="start">
+              开始
+            </button>
+            <button id="pause" data-control="pause" hidden>暂停</button>
+            <button id="resume" data-control="resume" hidden>恢复</button>
+            <button id="stop" class="danger" data-control="stop" hidden>
+              停止
+            </button>
+          </div>
+          <div class="account-note">
+            <img
+              src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjgiIGhlaWdodD0iMTI4IiB2aWV3Qm94PSIwIDAgMTI4IDEyOCI+CiAgPGRlZnM+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9InRsb2dvLWEiIHgxPSI1MCUiIHgyPSI1MCUiIHkxPSIwJSIgeTI9Ijk5LjI1OCUiPgogICAgICA8c3RvcCBvZmZzZXQ9IjAlIiBzdG9wLWNvbG9yPSIjMkFBQkVFIi8+CiAgICAgIDxzdG9wIG9mZnNldD0iMTAwJSIgc3RvcC1jb2xvcj0iIzIyOUVEOSIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICA8L2RlZnM+CiAgPGcgZmlsbD0ibm9uZSIgZmlsbC1ydWxlPSJldmVub2RkIj4KICAgIDxjaXJjbGUgY3g9IjY0IiBjeT0iNjQiIHI9IjY0IiBmaWxsPSJ1cmwoI3Rsb2dvLWEpIiBmaWxsLXJ1bGU9Im5vbnplcm8iLz4KICAgIDxwYXRoIGZpbGw9IiNGRkYiIGZpbGwtcnVsZT0ibm9uemVybyIgZD0iTTI4Ljk3MDAzNzYsNjMuMzI0NDI0OCBDNDcuNjI3MzM3Myw1NS4xOTU3MzU3IDYwLjA2ODQ1OTQsNDkuODM2ODA2MyA2Ni4yOTM0MDM2LDQ3LjI0NzYzNjYgQzg0LjA2Njg4NDUsMzkuODU1MDMxIDg3Ljc2MDA2MTYsMzguNTcwODU2MyA5MC4xNjcyMjI3LDM4LjUyOCBDOTAuNjk2NjU1NSwzOC41MTkxMjU4IDkxLjg4MDQyNzQsMzguNjUwMzM1MSA5Mi42NDcyMjUxLDM5LjI3MjUzODUgQzkzLjI5NDY5NCwzOS43OTc5MTQ5IDkzLjQ3MjgzODcsNDAuNTA3NjIzNyA5My41NTgwODY1LDQxLjAwNTczODEgQzkzLjY0MzMzNDUsNDEuNTAzODUyNSA5My43NDk0ODg1LDQyLjYzODU3IDkzLjY2NTEwNDEsNDMuNTI1MjA1MiBDOTIuNzAxOTUyOSw1My42NDUxMTgyIDg4LjUzNDQxMzMsNzguMjAzNDc4MyA4Ni40MTQyMDU3LDg5LjUzNzk1NDIgQzg1LjUxNzA2NjIsOTQuMzMzOTk1OCA4My43NTA1NzEsOTUuOTQyMDg0MSA4Mi4wNDAzOTkxLDk2LjA5OTQ1NjggQzc4LjMyMzc5OTYsOTYuNDQxNDY0MSA3NS41MDE1ODI3LDkzLjY0MzI2ODUgNzEuOTAxODc0Myw5MS4yODM2MTQzIEM2Ni4yNjkwNDE0LDg3LjU5MTIyMTIgNjMuMDg2ODQ5Miw4NS4yOTI2OTUyIDU3LjYxOTIwOTUsODEuNjg5NjAxNyBDNTEuMzAwNDA1OCw3Ny41MjU2MDM4IDU1LjM5NjYyMzIsNzUuMjM2OTk4MSA1OC45OTc2OTExLDcxLjQ5Njc3NjEgQzU5Ljk0MDEwNzYsNzAuNTE3OTQyMSA3Ni4zMTU1MzAyLDU1LjYyMzIyOTMgNzYuNjMyNDc3MSw1NC4yNzIwNDU0IEM3Ni42NzIxMTY1LDU0LjEwMzA1NzMgNzYuNzA4OTAzOSw1My40NzMxNDk2IDc2LjMzNDY4NjcsNTMuMTQwNTM1MiBDNzUuOTYwNDY5NSw1Mi44MDc5MjA4IDc1LjQwODE1NzMsNTIuOTIxNjYyIDc1LjAwOTU5MzMsNTMuMDEyMTIxMyBDNzQuNDQ0NjQxLDUzLjE0MDM0NDcgNjUuNDQ2MTE3NSw1OS4wODgwMzUxIDQ4LjAxNDAyMjgsNzAuODU1MTkyMiBDNDUuNDU5ODIxOCw3Mi42MDkxMDM3IDQzLjE0NjMwNTksNzMuNDYzNjY4MiA0MS4wNzM0NzUxLDczLjQxODg4NTkgQzM4Ljc4ODM0NTMsNzMuMzY5NTE2OSAzNC4zOTI2NzI1LDcyLjEyNjgzODggMzEuMTI0OTQxNiw3MS4wNjQ2MjgyIEMyNy4xMTY5MzY2LDY5Ljc2MTc4MzggMjMuOTMxNDU0LDY5LjA3Mjk2MDUgMjQuMjA4ODM4LDY2Ljg2MDMyNzYgQzI0LjM1MzMxNjcsNjUuNzA3ODUxNCAyNS45NDAzODMyLDY0LjUyOTIxNzIgMjguOTcwMDM3Niw2My4zMjQ0MjQ4IFoiLz4KICA8L2c+Cjwvc3ZnPgo="
+              alt="Telegram"
+            /><span>开始时连接账号，需要认证时会单独提示。</span>
+          </div>
+        </header>
+        <aside class="panel daily-summary">
+          <h2>今日摘要</h2>
+          <div class="metrics">
+            <div>
+              <span>今日普通参与</span><strong id="count-chat">—</strong>
+            </div>
+            <div>
+              <span>今日签到</span><strong id="count-checkin">—</strong>
+            </div>
+            <div>
+              <span>今日抽奖尝试</span><strong id="count-lottery">—</strong>
+            </div>
+            <div>
+              <span>结果待核实</span><strong id="count-unknown">—</strong>
+            </div>
+          </div>
+        </aside>
+      </div>
+      <div class="notice" id="keep-running">
+        关闭网页不会停止后台任务。结束自动任务请先点击“停止”。
+      </div>
+      <div id="offline" class="notice warning" hidden>
+        页面连接已断开，后台可能仍在运行。正在重连，请勿假设任务已停止。
+      </div>
+      <div id="pending-config" class="notice" hidden>
+        有已保存但尚未应用的配置。停用开关立即阻止新动作，其他变化在停止并重新开始后生效。
+      </div>
+      <div id="migration" class="notice warning" hidden></div>
+      <section id="auth" class="panel auth" hidden>
+        <h2 id="auth-title">账号认证</h2>
+        <p>仅用于本次登录，不会保存认证输入。</p>
+        <form id="auth-form">
+          <label for="auth-answer">认证内容</label
+          ><input
+            id="auth-answer"
+            type="password"
+            autocomplete="off"
+            required
+            maxlength="200"
+          /><button type="submit" class="primary">提交认证</button>
+        </form>
+      </section>
+
+      <section class="page" id="overview">
+        <div class="heading">
+          <div>
+            <h1>运行概览</h1>
+            <p>先看任务状态，再处理需要你确认的事情。</p>
+          </div>
+          <button id="refresh">刷新状态</button>
+        </div>
+        <article class="panel">
+          <h2>需要处理</h2>
+          <div id="attention" class="stack">
+            <p class="muted">暂无人工待办</p>
+          </div>
+        </article>
+        <div class="task-board" aria-label="三类独立任务">
+          <article class="panel task-lane">
+            <div class="lane-header">
+              <span class="lane-symbol"
+                ><svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M21 11a8 8 0 0 1-8 8H7l-4 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"
+                  /></svg
+              ></span>
+              <div>
+                <h2>普通参与</h2>
+                <p>相关时接话，冷场时少量参与</p>
+              </div>
+            </div>
+            <div id="task-chat" class="lane-body">
+              <p class="muted">正在读取任务</p>
+            </div>
+            <div class="lane-footer">
+              <span id="task-chat-total">—</span
+              ><button data-go="groups">任务设置</button>
+            </div>
+          </article>
+          <article class="panel task-lane">
+            <div class="lane-header">
+              <span class="lane-symbol"
+                ><svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M7 3v4 M17 3v4 M3 10h18 M5 5h14v16H5z M8 15l3 3 5-5"
+                  /></svg
+              ></span>
+              <div>
+                <h2>每日签到</h2>
+                <p>失败不阻断普通聊天</p>
+              </div>
+            </div>
+            <div id="task-checkin" class="lane-body">
+              <p class="muted">正在读取任务</p>
+            </div>
+            <div class="lane-footer">
+              <span id="task-checkin-total">—</span
+              ><button data-go="groups">任务设置</button>
+            </div>
+          </article>
+          <article class="panel task-lane">
+            <div class="lane-header">
+              <span class="lane-symbol"
+                ><svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M4 8h16v4H4z M6 12v9h12v-9 M12 8v13 M12 8C4 8 5 1 9 3z M12 8c8 0 7-7 3-5z"
+                  /></svg
+              ></span>
+              <div>
+                <h2>抽奖参与</h2>
+                <p>复杂条件转人工核实</p>
+              </div>
+            </div>
+            <div id="task-lottery" class="lane-body">
+              <p class="muted">正在读取任务</p>
+            </div>
+            <div class="lane-footer">
+              <span id="task-lottery-total">—</span
+              ><button data-go="groups">任务设置</button>
+            </div>
+          </article>
+        </div>
+        <details class="panel group-details">
+          <summary>各群状态、额度与暂停操作</summary>
+          <div class="panel-title">
+            <h2>群组任务</h2>
+            <button data-go="groups">管理任务</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>群组</th>
+                  <th>普通参与</th>
+                  <th>每日签到</th>
+                  <th>抽奖</th>
+                  <th>今日文本额度</th>
+                  <th>运行说明</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="group-status">
+                <tr>
+                  <td colspan="6">尚未配置群组</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </details>
+
+        <article class="panel">
+          <div class="panel-title">
+            <h2>最近动态</h2>
+            <button id="clear-events">清空视图</button>
+          </div>
+          <div id="events" class="event-list" role="log" aria-label="运行动态">
+            <p class="muted">等待任务事件</p>
+          </div>
+        </article>
+      </section>
+
+      <section class="page" id="groups" hidden>
+        <div class="heading">
+          <div>
+            <h1>授权群与任务</h1>
+            <p>
+              每个群分别选择聊天、签到和抽奖；概率、时段与额度共用全局设置。
+            </p>
+          </div>
+        </div>
+        <article class="panel">
+          <label for="group-input">新增群组</label
+          ><textarea
+            id="group-input"
+            rows="3"
+            placeholder="@group_name 或 https://t.me/group_name，多群可换行"
+          ></textarea
+          ><button id="add-groups">添加到待保存列表</button>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>群链接</th>
+                  <th>聊天</th>
+                  <th>签到</th>
+                  <th>抽奖</th>
+                  <th>已获许可</th>
+                  <th>消息文件</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="group-editor"></tbody>
+            </table>
+          </div>
+          <p class="help">
+            确认许可只适用于该群。程序不会为了识别链接而加入群组。运行期间新增或删除群需先停止任务。
+          </p>
+          <button class="primary" id="save-groups">保存群组与任务</button>
+        </article>
+      </section>
+
+      <section class="page" id="chat" hidden>
+        <div class="heading">
+          <div>
+            <h1>普通参与</h1>
+            <p>
+              相关时接话，冷场时少量补充。额度是上限，不是每天必须完成的目标。
+            </p>
+          </div>
+        </div>
+        <form class="panel settings-form" id="chat-form">
+          <h2>参与策略</h2>
+          <div class="form-grid" id="chat-fields"></div>
+          <div class="notice">
+            新消息延续当前话题时重新生成；转题或风险变化时取消旧候选。连续两个完整冷场窗口无人回应，普通参与暂停至次日。
+          </div>
+          <button class="primary" type="submit">保存参与策略</button>
+        </form>
+      </section>
+
+      <section class="page" id="lottery" hidden>
+        <div class="heading">
+          <div>
+            <h1>签到与抽奖</h1>
+            <p>
+              签到失败不会连带停止聊天；抽奖只执行原消息中明确、简单的白名单动作。
+            </p>
+          </div>
+        </div>
+        <form class="panel settings-form" id="lottery-form">
+          <h2>扫描、额度与节流</h2>
+          <div class="form-grid" id="lottery-fields"></div>
+          <button class="primary" type="submit">保存抽奖设置</button>
+          <p class="help">
+            各群功能开关在“授权群与任务”。签到为精确顶层“签到”，每群上海自然日最多一次已发出尝试，计入文本额度。
+          </p>
+        </form>
+        <article class="panel">
+          <div class="panel-title">
+            <h2>各群扫描状态</h2>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>群组</th>
+                  <th>最近检查</th>
+                  <th>下次扫描</th>
+                  <th>累计发现</th>
+                  <th>状态</th>
+                </tr>
+              </thead>
+              <tbody id="scan-status"></tbody>
+            </table>
+          </div>
+        </article>
+        <article class="panel">
+          <div class="panel-title">
+            <h2>抽奖记录与提醒</h2>
+            <label class="check"
+              ><input
+                type="checkbox"
+                id="only-pending"
+                checked
+              />仅看待处理</label
+            >
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>发现时间</th>
+                  <th>群组</th>
+                  <th>状态</th>
+                  <th>原因</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="lottery-rows"></tbody>
+            </table>
+          </div>
+          <div class="pager">
+            <button id="lottery-prev">上一页</button
+            ><span id="lottery-page">尚未加载</span
+            ><button id="lottery-next">下一页</button>
+          </div>
+        </article>
+        <article class="panel">
+          <h2>清理历史</h2>
+          <p>
+            只可在任务停止后操作。按上海发现日期清理；删除去重信息后可能再次发现旧抽奖。
+          </p>
+          <label for="cleanup-date">清理此日期之前的记录（不含当日）</label
+          ><input type="date" id="cleanup-date" /><button id="cleanup-preview">
+            查看影响范围
+          </button>
+          <p id="cleanup-count" class="help"></p>
+          <button id="cleanup-run" class="danger" disabled>
+            二次确认并清理
+          </button>
+        </article>
+      </section>
+
+      <section class="page" id="content" hidden>
+        <div class="heading">
+          <div>
+            <h1>AI 与消息库</h1>
+            <p>
+              AI 主动跳过时不会强行改发 TXT；网络等不可用情况才尝试消息库兜底。
+            </p>
+          </div>
+        </div>
+        <form class="panel settings-form" id="ai-form">
+          <h2>AI 接口</h2>
+          <div class="form-grid" id="ai-fields"></div>
+          <div class="notice">
+            启用 AI
+            会把必要群聊正文与文本上下文发给你配置的服务，不发送会话、凭据、数据库或媒体。模型不拥有执行权限。
+          </div>
+          <button class="primary" type="submit">保存 AI 设置</button
+          ><button type="button" data-clear-secret="ai_api_key">
+            清除已保存 AI 密钥
+          </button>
+        </form>
+        <article class="panel">
+          <h2>TXT 消息库</h2>
+          <div class="inline">
+            <label for="library-select">消息文件</label
+            ><select id="library-select"></select
+            ><button id="library-load">加载</button>
+          </div>
+          <p id="library-info" class="help">
+            每行一条消息，句中的逗号保持不变。
+          </p>
+          <label for="library-text">消息内容</label
+          ><textarea id="library-text" rows="9" spellcheck="false"></textarea
+          ><button id="library-save" class="primary">保存消息库</button>
+        </article>
+      </section>
+
+      <section class="page" id="audit" hidden>
+        <div class="heading">
+          <div>
+            <h1>安全与审计</h1>
+            <p>发送、跳过、停发与恢复都有明确原因。未知外部结果不自动重试。</p>
+          </div>
+          <button id="refresh-audit">刷新</button>
+        </div>
+        <article class="panel">
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>群组</th>
+                  <th>事件</th>
+                  <th>原因</th>
+                </tr>
+              </thead>
+              <tbody id="audit-rows"></tbody>
+            </table>
+          </div>
+          <div class="pager">
+            <button id="audit-prev">上一页</button
+            ><span id="audit-page">尚未加载</span
+            ><button id="audit-next">下一页</button>
+          </div>
+        </article>
+        <article class="panel">
+          <h2>外发账本</h2>
+          <p>已执行不等于中奖；未知表示可能已经发出，禁止按“失败”自动重做。</p>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>时间</th>
+                  <th>群组</th>
+                  <th>类型</th>
+                  <th>状态</th>
+                  <th>说明</th>
+                </tr>
+              </thead>
+              <tbody id="action-rows"></tbody>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <section class="page" id="settings" hidden>
+        <div class="heading">
+          <div>
+            <h1>连接与设置</h1>
+            <p>保存设置不会连接 Telegram。首次登录在点击开始后进行。</p>
+          </div>
+        </div>
+        <form class="panel settings-form" id="connection-form">
+          <h2>Telegram 凭据与代理</h2>
+          <div class="form-grid" id="connection-fields"></div>
+          <button class="primary" type="submit">保存连接设置</button
+          ><button type="button" data-clear-secret="api_hash">
+            清除已保存 API Hash
+          </button>
+        </form>
+        <form class="panel settings-form" id="schedule-form">
+          <h2>工作时段</h2>
+          <div class="form-grid" id="schedule-fields"></div>
+          <p class="help">
+            统一使用上海时间。时段外只读观察，不发送聊天、签到或抽奖动作。
+          </p>
+          <button class="primary" type="submit">保存工作时段</button>
+        </form>
+      </section>
+      <div id="toast" role="status" aria-live="polite" hidden></div>
+    </main>
+  </body>
+</html>

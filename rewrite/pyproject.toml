@@ -1,0 +1,23 @@
+[project]
+name = "be-water-tg-next"
+version = "2.0.0"
+description = "授权群自然参与、每日签到与安全抽奖的本机中文控制台"
+requires-python = ">=3.11,<3.12"
+
+[dependency-groups]
+runtime = [
+    "telethon==1.44.0",
+    "python-dotenv==1.2.2",
+    "python-socks[asyncio]==3.0.0",
+    "flask==3.1.3",
+    "waitress==3.0.2",
+    "openai==2.24.0",
+    "tzdata==2025.3",
+]
+dev = ["pytest==9.1.1", "pytest-asyncio==1.4.0"]
+build = ["pyinstaller==6.22.2"]
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true

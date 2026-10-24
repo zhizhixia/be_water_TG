@@ -13,7 +13,9 @@ def message(text: str, *, source: str = "incremental", pinned: bool = False, occ
 
 def test_rule_complete_lottery_is_certain_and_ended_is_rejected() -> None:
     """明确抽奖组合由规则决定，无需 AI。"""
-    assert detect(message("抽奖 奖品耳机，截止时间今晚，点击参与")).certain
+    outcome = detect(message("抽奖 奖品耳机，截止 2026-09-01T12:00:00+08:00，点击参与"))
+    assert outcome.certain
+    assert outcome.deadline == "2026-09-01T12:00:00+08:00"
     ended = detect(message("抽奖结束，感谢参与"))
     assert not ended.is_lottery and ended.certain
 
@@ -40,5 +42,31 @@ async def test_complete_rule_never_calls_ai() -> None:
         async def analyze(self, _payload):
             raise AssertionError("不应调用 AI")
 
-    outcome = await detect_with_ai(message("抽奖 奖品，截止时间今晚，点击参与"), ForbiddenAI())
+    outcome = await detect_with_ai(
+        message("抽奖 奖品，截止 2026-09-01T12:00:00+08:00，点击参与"),
+        ForbiddenAI(),
+    )
     assert outcome.is_lottery and outcome.certain
+
+
+@pytest.mark.asyncio
+async def test_ai_safety_metadata_is_preserved_for_downstream_review() -> None:
+    """自然语言截止和参与条件必须由 Detection 原样带到生产规划边界。"""
+    class AI:
+        async def analyze(self, _payload):
+            return {
+                "is_lottery": True,
+                "confidence": 0.95,
+                "summary": "限时抽奖",
+                "deadline": "2026-09-01T12:00:00+08:00",
+                "required_actions": ["点击参与"],
+                "reason": "明确",
+            }
+
+    outcome = await detect_with_ai(message("抽奖，截止时间今晚，点击参与"), AI())
+
+    assert outcome.deadline == "2026-09-01T12:00:00+08:00"
+    assert outcome.deadline_claimed is True
+    assert outcome.deadline_required is True
+    assert outcome.required_actions == ("点击参与",)
+    assert outcome.ai_reviewed is True

@@ -121,3 +121,19 @@ async def test_stop_rejects_new_jobs_and_clears_unstarted_jobs():
     assert await queue.put(new_job) is False
     assert await queue.run_once() is False
     assert called == []
+
+
+@pytest.mark.asyncio
+async def test_pause_gate_keeps_unstarted_job_queued_until_resume():
+    """暂停或非时段不执行未开始任务，恢复后仍可逐个处理。"""
+    queue = LotteryQueue()
+    called = []
+
+    async def job():
+        called.append(True)
+
+    await queue.put(job)
+    assert await queue.run_once(can_run=lambda: False) is False
+    assert called == []
+    assert await queue.run_once(can_run=lambda: True) is True
+    assert called == [True]

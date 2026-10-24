@@ -38,19 +38,25 @@ class LotteryQueue:
         await self._queue.put(job)
         return True
 
-    async def run_once(self, stop_event: StopEvent | None = None) -> bool:
+    async def run_once(self, stop_event: StopEvent | None = None,
+                       can_run: Callable[[], bool] | None = None) -> bool:
         """串行执行一个作业，并在外部停止信号触发时中断条目间等待。"""
         async with self._worker_lock:
-            if self._is_stopped(stop_event) or self._queue.empty(): return False
+            if self._is_stopped(stop_event) or self._queue.empty() or (can_run and not can_run()):
+                return False
             if self._started:
                 wait_seconds = self._random_int(self._wait_min_seconds, self._wait_max_seconds)
                 if stop_event is None:
                     await self._sleeper(wait_seconds)
                 else:
                     await self._wait_interruptibly(wait_seconds, stop_event)
-                if self._is_stopped(stop_event): return False
+                if self._is_stopped(stop_event) or (can_run and not can_run()): return False
             job = await self._queue.get()
-            if self._is_stopped(stop_event): return False
+            if self._is_stopped(stop_event):
+                return False
+            if can_run and not can_run():
+                await self._queue.put(job)
+                return False
             self._started = True
             await job()
             return True

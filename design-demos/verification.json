@@ -1,0 +1,435 @@
+{
+  "status": "passed",
+  "browser": "155.0.8059.84",
+  "variants": 3,
+  "viewports": 2,
+  "viewsPerVariant": 7,
+  "records": [
+    {
+      "variant": 1,
+      "width": 1440,
+      "view": "overview",
+      "scrollWidth": 1440,
+      "minContrast": 6.23,
+      "issues": []
+    },
+    {
+      "variant": 1,
+      "width": 1440,
+      "view": "groups",
+      "scrollWidth": 1440,
+      "minContrast": 6.23,
+      "issues": []
+    },
+    {
+      "variant": 1,
+      "width": 1440,
+      "view": "chat",
+      "scrollWidth": 1440,
+      "minContrast": 6.23,
+      "issues": []
+    },
+    {
+      "variant": 1,
+      "width": 1440,
+      "view": "lottery",
+      "scrollWidth": 1440,
+      "minContrast": 6.23,
+      "issues": []
+    },
+    {
+      "variant": 1,
+      "width": 1440,
+      "view": "content",
+      "scrollWidth": 1440,
+      "minContrast": 6.23,
+      "issues": []
+    },
+    {
+      "variant": 1,
+      "width": 1440,
+      "view": "audit",
+      "scrollWidth": 1440,
+      "minContrast": 8.24,
+      "issues": []
+    },
+    {
+      "variant": 1,
+      "width": 1440,
+      "view": "settings",
+      "scrollWidth": 1440,
+      "minContrast": 6.23,
+      "issues": []
+    },
+    {
+      "variant": 1,
+      "width": 1440,
+      "view": "unknown",
+      "scrollWidth": 1440,
+      "minContrast": 6.23,
+      "issues": []
+    },
+    {
+      "variant": 1,
+      "width": 1440,
+      "interactions": "passed",
+      "consoleErrors": 0,
+      "networkRequests": 0
+    },
+    {
+      "variant": 1,
+      "width": 375,
+      "view": "overview",
+      "scrollWidth": 375,
+      "minContrast": 6.23,
+      "issues": []
+    },
+    {
+      "variant": 1,
+      "width": 375,
+      "view": "groups",
+      "scrollWidth": 375,
+      "minContrast": 6.23,
+      "issues": []
+    },
+    {
+      "variant": 1,
+      "width": 375,
+      "view": "chat",
+      "scrollWidth": 375,
+      "minContrast": 6.23,
+      "issues": []
+    },
+    {
+      "variant": 1,
+      "width": 375,
+      "view": "lottery",
+      "scrollWidth": 375,
+      "minContrast": 6.23,
+      "issues": []
+    },
+    {
+      "variant": 1,
+      "width": 375,
+      "view": "content",
+      "scrollWidth": 375,
+      "minContrast": 6.23,
+      "issues": []
+    },
+    {
+      "variant": 1,
+      "width": 375,
+      "view": "audit",
+      "scrollWidth": 375,
+      "minContrast": 8.24,
+      "issues": []
+    },
+    {
+      "variant": 1,
+      "width": 375,
+      "view": "settings",
+      "scrollWidth": 375,
+      "minContrast": 6.23,
+      "issues": []
+    },
+    {
+      "variant": 1,
+      "width": 375,
+      "view": "unknown",
+      "scrollWidth": 375,
+      "minContrast": 6.23,
+      "issues": []
+    },
+    {
+      "variant": 1,
+      "width": 375,
+      "interactions": "passed",
+      "consoleErrors": 0,
+      "networkRequests": 0
+    },
+    {
+      "variant": 2,
+      "width": 1440,
+      "view": "overview",
+      "scrollWidth": 1440,
+      "minContrast": 5.27,
+      "issues": []
+    },
+    {
+      "variant": 2,
+      "width": 1440,
+      "view": "groups",
+      "scrollWidth": 1440,
+      "minContrast": 5.27,
+      "issues": []
+    },
+    {
+      "variant": 2,
+      "width": 1440,
+      "view": "chat",
+      "scrollWidth": 1440,
+      "minContrast": 5.27,
+      "issues": []
+    },
+    {
+      "variant": 2,
+      "width": 1440,
+      "view": "lottery",
+      "scrollWidth": 1440,
+      "minContrast": 5.27,
+      "issues": []
+    },
+    {
+      "variant": 2,
+      "width": 1440,
+      "view": "content",
+      "scrollWidth": 1440,
+      "minContrast": 5.27,
+      "issues": []
+    },
+    {
+      "variant": 2,
+      "width": 1440,
+      "view": "audit",
+      "scrollWidth": 1440,
+      "minContrast": 5.27,
+      "issues": []
+    },
+    {
+      "variant": 2,
+      "width": 1440,
+      "view": "settings",
+      "scrollWidth": 1440,
+      "minContrast": 5.27,
+      "issues": []
+    },
+    {
+      "variant": 2,
+      "width": 1440,
+      "view": "unknown",
+      "scrollWidth": 1440,
+      "minContrast": 5.27,
+      "issues": []
+    },
+    {
+      "variant": 2,
+      "width": 1440,
+      "interactions": "passed",
+      "consoleErrors": 0,
+      "networkRequests": 0
+    },
+    {
+      "variant": 2,
+      "width": 375,
+      "view": "overview",
+      "scrollWidth": 375,
+      "minContrast": 5.27,
+      "issues": []
+    },
+    {
+      "variant": 2,
+      "width": 375,
+      "view": "groups",
+      "scrollWidth": 375,
+      "minContrast": 5.27,
+      "issues": []
+    },
+    {
+      "variant": 2,
+      "width": 375,
+      "view": "chat",
+      "scrollWidth": 375,
+      "minContrast": 5.27,
+      "issues": []
+    },
+    {
+      "variant": 2,
+      "width": 375,
+      "view": "lottery",
+      "scrollWidth": 375,
+      "minContrast": 5.27,
+      "issues": []
+    },
+    {
+      "variant": 2,
+      "width": 375,
+      "view": "content",
+      "scrollWidth": 375,
+      "minContrast": 5.27,
+      "issues": []
+    },
+    {
+      "variant": 2,
+      "width": 375,
+      "view": "audit",
+      "scrollWidth": 375,
+      "minContrast": 5.27,
+      "issues": []
+    },
+    {
+      "variant": 2,
+      "width": 375,
+      "view": "settings",
+      "scrollWidth": 375,
+      "minContrast": 5.27,
+      "issues": []
+    },
+    {
+      "variant": 2,
+      "width": 375,
+      "view": "unknown",
+      "scrollWidth": 375,
+      "minContrast": 5.27,
+      "issues": []
+    },
+    {
+      "variant": 2,
+      "width": 375,
+      "interactions": "passed",
+      "consoleErrors": 0,
+      "networkRequests": 0
+    },
+    {
+      "variant": 3,
+      "width": 1440,
+      "view": "overview",
+      "scrollWidth": 1440,
+      "minContrast": 5.28,
+      "issues": []
+    },
+    {
+      "variant": 3,
+      "width": 1440,
+      "view": "groups",
+      "scrollWidth": 1440,
+      "minContrast": 5.28,
+      "issues": []
+    },
+    {
+      "variant": 3,
+      "width": 1440,
+      "view": "chat",
+      "scrollWidth": 1440,
+      "minContrast": 5.28,
+      "issues": []
+    },
+    {
+      "variant": 3,
+      "width": 1440,
+      "view": "lottery",
+      "scrollWidth": 1440,
+      "minContrast": 5.28,
+      "issues": []
+    },
+    {
+      "variant": 3,
+      "width": 1440,
+      "view": "content",
+      "scrollWidth": 1440,
+      "minContrast": 5.28,
+      "issues": []
+    },
+    {
+      "variant": 3,
+      "width": 1440,
+      "view": "audit",
+      "scrollWidth": 1440,
+      "minContrast": 5.28,
+      "issues": []
+    },
+    {
+      "variant": 3,
+      "width": 1440,
+      "view": "settings",
+      "scrollWidth": 1440,
+      "minContrast": 5.28,
+      "issues": []
+    },
+    {
+      "variant": 3,
+      "width": 1440,
+      "view": "unknown",
+      "scrollWidth": 1440,
+      "minContrast": 5.28,
+      "issues": []
+    },
+    {
+      "variant": 3,
+      "width": 1440,
+      "interactions": "passed",
+      "consoleErrors": 0,
+      "networkRequests": 0
+    },
+    {
+      "variant": 3,
+      "width": 375,
+      "view": "overview",
+      "scrollWidth": 375,
+      "minContrast": 5.28,
+      "issues": []
+    },
+    {
+      "variant": 3,
+      "width": 375,
+      "view": "groups",
+      "scrollWidth": 375,
+      "minContrast": 5.28,
+      "issues": []
+    },
+    {
+      "variant": 3,
+      "width": 375,
+      "view": "chat",
+      "scrollWidth": 375,
+      "minContrast": 5.28,
+      "issues": []
+    },
+    {
+      "variant": 3,
+      "width": 375,
+      "view": "lottery",
+      "scrollWidth": 375,
+      "minContrast": 5.28,
+      "issues": []
+    },
+    {
+      "variant": 3,
+      "width": 375,
+      "view": "content",
+      "scrollWidth": 375,
+      "minContrast": 5.28,
+      "issues": []
+    },
+    {
+      "variant": 3,
+      "width": 375,
+      "view": "audit",
+      "scrollWidth": 375,
+      "minContrast": 5.28,
+      "issues": []
+    },
+    {
+      "variant": 3,
+      "width": 375,
+      "view": "settings",
+      "scrollWidth": 375,
+      "minContrast": 5.28,
+      "issues": []
+    },
+    {
+      "variant": 3,
+      "width": 375,
+      "view": "unknown",
+      "scrollWidth": 375,
+      "minContrast": 5.28,
+      "issues": []
+    },
+    {
+      "variant": 3,
+      "width": 375,
+      "interactions": "passed",
+      "consoleErrors": 0,
+      "networkRequests": 0
+    }
+  ]
+}

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 import threading
 from datetime import datetime
 from types import SimpleNamespace
@@ -10,7 +11,8 @@ from zoneinfo import ZoneInfo
 
 from src.config import Settings
 from src.group_identity import GroupIdentity
-from src.lottery_models import MessageSnapshot
+from src.lottery_models import ButtonSnapshot, MessageSnapshot
+from src.sender import PublisherTrust
 from src.lottery_store import LotteryStore
 from src.state_store import StateStore
 from ui.send_loop import _in_schedule, _send_with_retry, send_loop
@@ -218,8 +220,9 @@ def test_lottery_queue_and_executor_receive_configured_limits(monkeypatch, tmp_p
         def __init__(self, **kwargs: object) -> None:
             captured["queue"] = kwargs
 
-        async def run_once(self, *, stop_event: object) -> bool:
+        async def run_once(self, *, stop_event: object, can_run: object) -> bool:
             captured["queue_stop_event"] = stop_event
+            captured["queue_can_run"] = can_run
             return False
 
         async def put(self, _job: object) -> bool:
@@ -324,7 +327,8 @@ def test_lottery_stop_clears_queue_and_events_only_expose_safe_identifiers(
         def __init__(self, **_kwargs: object) -> None:
             pass
 
-        async def run_once(self, *, stop_event: threading.Event) -> bool:
+        async def run_once(self, *, stop_event: threading.Event, can_run: object) -> bool:
+            assert can_run()
             stop_event.set()
             return False
 
@@ -345,3 +349,141 @@ def test_lottery_stop_clears_queue_and_events_only_expose_safe_identifiers(
         event_type, payload = call.args
         assert event_type in {"lottery_alert", "lottery_updated", "scan_health", "checkin_health"}
         assert set(payload) <= {"peer_id", "lottery_id", "reason", "status"}
+
+
+def test_checkin_refreshes_after_shanghai_day_changes_without_restart(monkeypatch, tmp_path) -> None:
+    """长驻循环跨上海午夜后创建新批次并且每群新日仅签到一次。"""
+    settings = Settings(
+        api_id=1, api_hash="x" * 32, phone="+1", target_groups=["https://t.me/allowed"],
+        state_db_path=str(tmp_path / "state.db"), lottery_enabled=False,
+        daily_checkin_enabled=True,
+    )
+    now = [datetime(2026, 8, 29, 23, 59, tzinfo=ZoneInfo("Asia/Shanghai"))]
+    sender = _lottery_sender()
+    sender.get_recent_messages = AsyncMock(return_value=[])
+    sender.send_group_text = AsyncMock(return_value=1)
+    manager = _lottery_manager()
+    waits = 0
+
+    async def wait(_seconds: float, _stop_event: object, _event_bus: object = None) -> bool:
+        nonlocal waits
+        waits += 1
+        if waits == 1:
+            now[0] = datetime(2026, 8, 30, 0, 1, tzinfo=ZoneInfo("Asia/Shanghai"))
+        else:
+            manager.stop_event.set()
+        return not manager.stop_event.is_set()
+
+    monkeypatch.setattr("ui.send_loop._interruptible_wait", wait)
+    asyncio.run(send_loop(
+        sender, settings, manager, MagicMock(), shanghai_now=lambda: now[0]
+    ))
+
+    assert [call.args for call in sender.send_group_text.await_args_list] == [
+        (101, "签到"), (101, "签到")
+    ]
+    store = LotteryStore(settings.state_db_path)
+    assert store.daily_batch_groups("2026-08-29") == [101]
+    assert store.daily_batch_groups("2026-08-30") == [101]
+
+
+def test_outside_schedule_neither_scans_nor_runs_lottery_queue(monkeypatch, tmp_path) -> None:
+    """非运行时段不得扫描或启动排队抽奖。"""
+    settings = _lottery_settings(tmp_path, 60)
+    settings.schedule_enabled = True
+    settings.schedule_morning_start = "08:00"
+    settings.schedule_morning_end = "09:00"
+    settings.schedule_afternoon_start = "14:00"
+    settings.schedule_afternoon_end = "15:00"
+    sender = _lottery_sender()
+    manager = _lottery_manager()
+    run_calls = []
+
+    class Queue:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def put(self, _job):
+            return True
+
+        async def run_once(self, **_kwargs):
+            run_calls.append(True)
+            return False
+
+    async def wait(_seconds, _stop_event, _event_bus=None):
+        manager.stop_event.set()
+        return False
+
+    monkeypatch.setattr("ui.send_loop.LotteryQueue", Queue)
+    monkeypatch.setattr("ui.send_loop._interruptible_wait", wait)
+    asyncio.run(send_loop(
+        sender, settings, manager, MagicMock(),
+        shanghai_now=lambda: datetime(2026, 8, 29, 12, tzinfo=ZoneInfo("Asia/Shanghai")),
+    ))
+
+    sender.get_current_pinned_messages.assert_not_awaited()
+    sender.get_latest_message_id.assert_not_awaited()
+    assert run_calls == []
+
+
+def test_production_pipeline_propagates_ai_deadline_and_required_actions(monkeypatch, tmp_path) -> None:
+    """真实主循环必须贯通 AI 安全元数据，并在执行前按上海时间拒绝过期与额外条件。"""
+    cases = [
+        ("2026-08-29T13:00:00+08:00", ["点击参与"], "PARTICIPATED", 1),
+        ("2026-08-29T11:00:00+08:00", ["点击参与"], "EXPIRED", 0),
+        ("2026-08-29T13:00:00+08:00", ["点击参与", "转发"], "MANUAL_REQUIRED", 0),
+        (None, ["点击参与"], "MANUAL_REQUIRED", 0),
+    ]
+
+    for index, (deadline, required_actions, expected_status, click_count) in enumerate(cases):
+        case_path = tmp_path / str(index)
+        settings = _lottery_settings(case_path, 60)
+        sender = _lottery_sender()
+        manager = _lottery_manager()
+        raw_message = MessageSnapshot(
+            101,
+            index + 1,
+            "抽奖，截止时间今晚，点击参与",
+            ((ButtonSnapshot("参与", "callback", b"join"),),),
+            occurred_at="2026-08-29T09:00:00+08:00",
+            sender_id=9,
+            pinned=True,
+        )
+        sender.get_current_pinned_messages.return_value = ([raw_message], True)
+        sender.get_publisher_trust = AsyncMock(return_value=PublisherTrust.ADMIN)
+        sender.get_message = AsyncMock(return_value=raw_message)
+        sender.click_callback = AsyncMock(return_value="ok")
+
+        class AI:
+            async def analyze(self, _payload):
+                return {
+                    "is_lottery": True,
+                    "confidence": 0.95,
+                    "summary": "限时抽奖",
+                    "deadline": deadline,
+                    "required_actions": required_actions,
+                    "reason": "明确",
+                }
+
+        async def wait(_seconds, _stop_event, _event_bus=None):
+            manager.stop_event.set()
+            return False
+
+        monkeypatch.setattr("ui.send_loop._interruptible_wait", wait)
+        asyncio.run(send_loop(
+            sender,
+            settings,
+            manager,
+            MagicMock(),
+            ai_sender=AI(),
+            lottery_scan_clock=lambda: 0.0,
+            shanghai_now=lambda: datetime(2026, 8, 29, 12, tzinfo=ZoneInfo("Asia/Shanghai")),
+        ))
+
+        with sqlite3.connect(settings.state_db_path) as db:
+            row = db.execute(
+                "SELECT deadline, participation_status FROM lottery_entry WHERE message_id=?",
+                (index + 1,),
+            ).fetchone()
+        assert row == (deadline, expected_status)
+        assert sender.click_callback.await_count == click_count

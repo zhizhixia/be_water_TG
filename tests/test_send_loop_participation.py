@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 from telethon.errors import ChannelPrivateError, FloodWaitError
 
 from src.config import Settings
+from src.group_identity import GroupIdentity
 from src.state_store import PauseKind, StateStore
 from src.activity_observer import Observation
 from ui.send_loop import SendState, _candidate_from_observation, send_loop
@@ -80,6 +81,41 @@ def test_question_candidate_is_generated_sent_and_persisted(tmp_path, fake_sende
 
     fake_sender.send_message.assert_awaited_once()
     assert store.get_group_state(settings.target_groups[0]).sent_count == 1
+
+
+def test_resolved_identity_keeps_stable_state_key_and_configured_message_alias(tmp_path) -> None:
+    """普通观察/发送使用稳定状态键，消息配置仍按原始群引用查找。"""
+    settings = _settings(tmp_path)
+    settings.lottery_enabled = False
+    settings.daily_checkin_enabled = False
+    manager = _manager()
+    sender = MagicMock()
+    sender.resolve_group_identity = AsyncMock(
+        return_value=GroupIdentity(-1000000000101, settings.target_groups[0], "允许群")
+    )
+    sender.get_recent_messages = AsyncMock(return_value=[
+        SimpleNamespace(
+            id=1, text="这个功能怎么配置？", date=datetime.now(TZ),
+            out=False, sender_id=2, sender=None,
+        )
+    ])
+    sender.is_group_admin = AsyncMock(return_value=False)
+
+    async def send_once(*_args, **kwargs):
+        assert kwargs["target_group"] == "-1000000000101"
+        manager.stop_event.set()
+
+    sender.send_message = AsyncMock(side_effect=send_once)
+    messages = MagicMock()
+    messages.get_message.return_value = "按配置说明操作"
+    store = StateStore(settings.state_db_path)
+    store.touch_activity("-1000000000101", datetime.now(TZ), message_id=0)
+
+    asyncio.run(send_loop(sender, settings, manager, messages, state_store=store))
+
+    messages.get_message.assert_called_with(settings.target_groups[0])
+    assert store.get_group_state("-1000000000101").sent_count == 1
+    assert store.get_group_state(settings.target_groups[0]).sent_count == 0
 
 
 def test_explicit_complaint_pauses_without_sending(tmp_path, fake_sender) -> None:

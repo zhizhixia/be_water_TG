@@ -30,7 +30,15 @@ class DailyCheckinService:
 
     def allows_normal_participation(self, peer_id: int) -> bool:
         """签到明确失败的群当天禁止普通参与。"""
-        return (local_date(self.clock), peer_id) not in self._failed
+        today = local_date(self.clock)
+        if (today, peer_id) in self._failed:
+            return False
+        status_reader = getattr(self.store, "daily_task_status", None)
+        if callable(status_reader):
+            return status_reader(peer_id, today, "CHECKIN") not in {
+                "FAILED", "CONFIRMATION_FAILED"
+            }
+        return True
 
     def allows_lottery(self, peer_id: int) -> bool:
         """抽奖不受签到失败门控影响。"""

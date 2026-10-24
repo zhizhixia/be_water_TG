@@ -40,6 +40,10 @@ class MessageSnapshot:
     pinned: bool = False
     source: str = "incremental"
     deadline: str | None = None
+    deadline_claimed: bool = False
+    deadline_required: bool = False
+    required_actions: tuple[str, ...] = ()
+    ai_reviewed: bool = False
 
 
 @dataclass(frozen=True)

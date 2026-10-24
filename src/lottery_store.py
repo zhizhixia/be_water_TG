@@ -133,11 +133,32 @@ class LotteryStore:
 
     def claim_daily_task(self, peer_id: int, local_date: str, task_type: str) -> bool:
         """原子领取每群每日单次任务。"""
-        return self._write(lambda db: db.execute("INSERT OR IGNORE INTO group_daily_task(peer_id,local_date,task_type,status,attempt_count) VALUES (?,?,?,?,1)", (peer_id, local_date, task_type, "EXECUTING")).rowcount == 1)
+        def operation(db: sqlite3.Connection) -> bool:
+            inserted = db.execute(
+                "INSERT OR IGNORE INTO group_daily_task(peer_id,local_date,task_type,status,attempt_count) VALUES (?,?,?,?,1)",
+                (peer_id, local_date, task_type, "EXECUTING"),
+            ).rowcount == 1
+            if inserted:
+                return True
+            return db.execute(
+                "UPDATE group_daily_task SET status='EXECUTING',attempt_count=attempt_count+1 "
+                "WHERE peer_id=? AND local_date=? AND task_type=? AND status='STOPPED'",
+                (peer_id, local_date, task_type),
+            ).rowcount == 1
+        return self._write(operation)
 
     def finish_daily_task(self, peer_id: int, local_date: str, task_type: str, status: str) -> None:
         """提交每日任务终态。"""
         self._write(lambda db: db.execute("UPDATE group_daily_task SET status=? WHERE peer_id=? AND local_date=? AND task_type=?", (status, peer_id, local_date, task_type)))
+
+    def daily_task_status(self, peer_id: int, local_date: str, task_type: str) -> str | None:
+        """读取每日任务状态，供跨重启门控和恢复判定使用。"""
+        with closing(self._connect()) as db:
+            row = db.execute(
+                "SELECT status FROM group_daily_task WHERE peer_id=? AND local_date=? AND task_type=?",
+                (peer_id, local_date, task_type),
+            ).fetchone()
+        return str(row["status"]) if row else None
 
     def record_entry(self, peer_id: int, message_id: int, fingerprint: str, deadline: str | None, status: str, summary: str = "") -> int:
         """原子记录发现；同一 Telegram 消息始终返回既有记录。"""

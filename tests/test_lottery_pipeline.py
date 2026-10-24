@@ -19,8 +19,12 @@ from src.lottery_store import LotteryStore
 from src.lottery_text_policy import is_safe_fixed_text
 
 
-def message(peer_id: int = 1, message_id: int = 2, text: str = "抽奖 截止 参与") -> MessageSnapshot:
-    return MessageSnapshot(peer_id, message_id, text, ((ButtonSnapshot("参与", "callback", b"safe"),),))
+def message(peer_id: int = 1, message_id: int = 2, text: str = "抽奖 参与") -> MessageSnapshot:
+    return MessageSnapshot(
+        peer_id, message_id, text,
+        ((ButtonSnapshot("参与", "callback", b"safe"),),),
+        publisher_trust=PublisherTrust.ADMIN,
+    )
 
 
 def test_sqlite_quota_and_alert_status_are_atomic(tmp_path) -> None:
@@ -38,7 +42,7 @@ def test_fingerprint_planner_and_text_whitelist_fail_closed() -> None:
     trusted = MessageSnapshot(
         1,
         2,
-        "抽奖 截止",
+        "抽奖",
         ((ButtonSnapshot("参与", "callback", b"x"),),),
         publisher_trust=PublisherTrust.ADMIN,
     )
@@ -63,7 +67,11 @@ async def test_ai_fallback_queue_and_executor_do_not_call_sender_before_prewrite
     store = LotteryStore(tmp_path / "state.db")
     entry = store.record_entry(1, 2, "f", None, "DETECTED")
     executor = LotteryExecutor(fake_sender, store)
-    result = await executor.execute(message(), (LotteryAction(ActionType.CLICK_BUTTON, "sig", 0, 0),), lambda: asyncio.sleep(0, result=message()), entry)
+    snapshot = message()
+    result = await executor.execute(
+        snapshot, plan(snapshot).actions,
+        lambda: asyncio.sleep(0, result=snapshot), entry,
+    )
     assert result == "PARTICIPATED"
     assert fake_sender.calls == [("click_callback", 1, 2, 0, 0)]
     queue = LotteryQueue()

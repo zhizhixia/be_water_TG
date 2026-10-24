@@ -5,6 +5,7 @@ import asyncio
 import socket
 import threading
 from collections.abc import AsyncIterator
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -13,6 +14,71 @@ from src.config import Settings
 from src.runtime_paths import RuntimePaths
 from src.runtime_state import ApplicationRuntimeState
 from tests.fakes import FakeClock, FakeLotteryAI, FakeRandom, FakeSleeper, FakeTelegramSender
+
+
+CONFIG_ENV_NAMES = (
+    "API_ID",
+    "API_HASH",
+    "PHONE",
+    "TARGET_GROUP",
+    "TARGET_GROUPS",
+    "MIN_INTERVAL",
+    "MAX_INTERVAL",
+    "PROXY_HOST",
+    "PROXY_PORT",
+    "PROXY_TYPE",
+    "MESSAGE_FILES",
+    "AI_ENABLED",
+    "AI_API_KEY",
+    "AI_BASE_URL",
+    "AI_MODEL",
+    "AI_PROMPT",
+    "AI_CONTEXT_COUNT",
+    "AI_TEMPERATURE",
+    "AI_MAX_TOKENS",
+    "AI_TIMEOUT",
+    "SCHEDULE_ENABLED",
+    "SCHEDULE_MORNING_START",
+    "SCHEDULE_MORNING_END",
+    "SCHEDULE_AFTERNOON_START",
+    "SCHEDULE_AFTERNOON_END",
+    "ANTI_DETECT",
+    "TYPING_DELAY_MIN",
+    "TYPING_DELAY_MAX",
+    "THINKING_DELAY_MIN",
+    "THINKING_DELAY_MAX",
+    "SKIP_ROUND_PCT",
+    "GROUP_GAP_MIN",
+    "GROUP_GAP_MAX",
+    "DAILY_LIMIT",
+    "IDLE_THRESHOLD_MINUTES",
+    "QUESTION_REPLY_PCT",
+    "DISCUSSION_REPLY_PCT",
+    "REPLY_DELAY_MIN",
+    "REPLY_DELAY_MAX",
+    "STATE_DB_PATH",
+    "LOTTERY_ENABLED",
+    "LOTTERY_SCAN_INTERVAL_MINUTES",
+    "DAILY_PINNED_LOTTERY_SCAN_ENABLED",
+    "DAILY_CHECKIN_ENABLED",
+    "LOTTERY_PER_GROUP_DAILY_LIMIT",
+    "LOTTERY_ACCOUNT_DAILY_LIMIT",
+    "LOTTERY_ACTION_GAP_MIN_SECONDS",
+    "LOTTERY_ACTION_GAP_MAX_SECONDS",
+)
+
+
+@pytest.fixture(autouse=True)
+def isolate_runtime_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> Path:
+    """将每个测试的运行目录和配置环境隔离到独立临时目录。"""
+    for name in CONFIG_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
+    local_appdata = tmp_path / "local-app-data"
+    monkeypatch.setenv("LOCALAPPDATA", str(local_appdata))
+    return local_appdata
 
 
 @pytest.fixture(autouse=True)
@@ -82,11 +148,11 @@ def fake_lottery_ai() -> FakeLotteryAI:
 
 @pytest.fixture
 def set_required_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """设置 load_settings 所需的基础环境变量，并阻止加载真实 .env 文件。"""
-    monkeypatch.setattr("src.config.load_dotenv", lambda **kwargs: None)
+    """在隔离环境中设置 load_settings 所需的非敏感测试配置。"""
     monkeypatch.setenv("API_ID", "12345")
     monkeypatch.setenv("API_HASH", "a" * 32)
-    monkeypatch.setenv("PHONE", "+8613800138000")
+    monkeypatch.setenv("PHONE", "+8610000000000")
+    monkeypatch.setenv("TARGET_GROUP", "https://t.me/test_group")
     monkeypatch.setenv("MIN_INTERVAL", "60")
     monkeypatch.setenv("MAX_INTERVAL", "180")
     monkeypatch.setenv("GROUP_GAP_MIN", "1")

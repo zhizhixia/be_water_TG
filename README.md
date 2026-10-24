@@ -1,5 +1,9 @@
 # Be Water TG
 
+> **新版重写候选入口：** 双击 `start-v2.bat`，或阅读 [`rewrite/README.md`](rewrite/README.md)。新版源码、中文界面、独立锁文件和测试均在 `rewrite/`。打开控制台不会登录 Telegram，只有点击“开始”才连接。
+>
+> 原有 `run.bat`、根目录 `main.py` 与下文旧版说明暂留用于对照和回退，不会自动切换或删除真实数据。**不要同时运行新旧两版，也不要把旧版配置行为说明套到新版。** 新版开关停用立即生效，其他运行参数停止并重新开始后生效。
+
 面向**已取得管理员明确许可**的 Telegram 群组的低打扰自动参与工具。程序在本机启动一个只监听 `127.0.0.1` 的 Web 控制台（Flask + Waitress），Telethon 负责连接 Telegram；可选 AI 仅用于受限的内容识别，不能扩大自动化能力。
 
 > **授权与安全前提：** 本工具只处理你在 `TARGET_GROUPS` 中显式配置、并已取得群管理员许可的授权群。它不用于隐藏自动化身份、绕过 Telegram 风控、自动加群、向未授权群发言，也不会访问外部服务来完成群内任务。
@@ -120,6 +124,8 @@
 ## 从源码运行（开发者）
 
 前提：Windows、Python 3.11、[uv](https://docs.astral.sh/uv/)。
+
+> **测试数据安全：** 旧版部分测试直接使用默认相对路径 `state/be_water.db`，仅隔离 `LOCALAPPDATA` 并不足以保护现有旧库。请在不含真实 `.env`、session、数据库的干净克隆或独立源码副本中运行下列旧版测试，不要在保存历史运行数据的目录直接执行。新版匿名测试入口见 [`rewrite/README.md`](rewrite/README.md)。
 
 ```bash
 # 1. 安装全部依赖（runtime / dev / build 三组）
