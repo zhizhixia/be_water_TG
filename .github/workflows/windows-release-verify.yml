@@ -1,136 +1,109 @@
-# Windows v1.0.1 标签发布验证流水线
-# ---------------------------------------------------------------------------
-# 触发条件：
-#   1) push 到 v* 标签  → 完整验证链路，构建通过后创建人工审核的 Draft Release
-#   2) workflow_dispatch → 手动触发，走完整构建 + smoke + 独立审计链路
-#   3) push 到 main 分支 → 仅跑测试回归（构建/发布步骤被条件跳过，避免浪费资源）
-#
-# 环境约定：
-#   - Python 锁定 3.11（pyproject requires-python >=3.11,<3.12）
-#   - 依赖来自 pyproject.toml + uv.lock（无 requirements.txt），分组 runtime/dev/build
-#   - 安装用 `uv sync --all-groups` 一次性装全部分组
-#
-# 安全约定：
-#   - 绝不使用真实凭据 / secret；smoke 使用隔离 LOCALAPPDATA（build_windows.py 已处理）
-#   - CI 产物不保留 .env / *.session / db；verify_release.py 会审计归档不含敏感内容
-# ---------------------------------------------------------------------------
+# main只做新旧回归；v2标签构建新版，保留草稿供下载核验后再公开。
 name: windows-release-verify
 
 on:
   push:
     tags:
-      - "v*"      # 版本标签触发正式验证 + Draft Release
+      - "v2.*"
     branches:
-      - main      # main 分支推送仅跑测试回归
-  workflow_dispatch:   # 手动触发，走完整构建链路
+      - main
+  workflow_dispatch:
 
-# 创建/上传 Release 需要 contents 写权限；其余步骤无额外权限要求。
 permissions:
   contents: write
 
 jobs:
-  # 单一作业：Windows 环境完成 测试 → 构建(含内置 smoke) → 独立审计 → 草稿发布
   build-and-verify:
-    name: 测试、构建与发布验证 (Windows / Python 3.11)
+    name: 新旧测试与新版发布验证 (Windows / Python 3.11)
     runs-on: windows-latest
     steps:
-      # 1) 检出代码：fetch-depth 0 拉取完整历史与标签，供版本与变更推断使用
-      - name: 检出代码（含完整历史与标签）
+      - name: 检出对应提交
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 2) 安装 uv 并锁定 Python 3.11。
-      #    使用 astral-sh/setup-uv@v6 当前主流稳定主版本标签（v5 亦可，语义兼容）。
-      #    若网络受限可退化为 runner 自带 Python + `pip install uv`，但 runner 自带
-      #    为 3.13，不满足 <3.12 约束，故此处由 setup-uv 托管安装 3.11。
       - name: 安装 uv 并准备 Python 3.11
         uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.11"
           enable-cache: true
 
-      # 3) 安装全部依赖分组（runtime / dev / build）
-      - name: 同步全部依赖分组
-        run: uv sync --all-groups
-
-      # 4) 运行完整测试套件（fake/mock，不连真实网络）
-      - name: 运行测试套件
-        shell: bash
-        run: uv run pytest tests -v --tb=short
-
-      # 4b) 失败时将失败详情写入步骤摘要，便于在无完整日志访问权限时定位
-      - name: 输出测试失败详情到摘要
-        if: failure()
+      - name: 同步新旧版本锁定依赖
         shell: bash
         run: |
-          uv run pytest tests -x --tb=no -q > pytest-diagnostic.txt 2>&1 || true
-          grep -E "^(FAILED|ERROR)" pytest-diagnostic.txt | head -40 | while IFS= read -r line; do
-            echo "::error title=pytest::${line}"
-          done
-          {
-            echo "## pytest 失败详情"
-            echo '```'
-            tail -120 pytest-diagnostic.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          uv sync --frozen --all-groups
+          uv sync --project rewrite --frozen --all-groups
 
-      # 5) 构建 Windows 发布包（内置严格 smoke：隔离 LOCALAPPDATA + 中文空格路径
-      #    启动 EXE、校验 /api/health 三字段、静态资源 200、运行数据隔离、单实例、
-      #    端口释放；产出 dist/BeWaterTG/、dist/BeWaterTG-win64.zip、dist/SHA256SUMS.txt）
-      #    仅标签 / 手动触发时执行，main 分支推送跳过（只跑测试）。
-      - name: 构建 Windows 发布包（含内置 smoke）
+      # runner是无真实数据的干净检出；本机旧版测试不能直接照此在历史数据旁执行。
+      - name: 运行旧版回归
+        shell: bash
+        run: uv run --frozen pytest tests -v --tb=short
+
+      - name: 运行新版回归
+        shell: bash
+        run: uv run --project rewrite --frozen --all-groups pytest -c rewrite/pytest.ini rewrite/tests -v --tb=short
+
+      - name: 构建新版 Windows 完整目录包
         if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         shell: bash
         run: |
-          uv run python scripts/build_windows.py > build-output.txt 2>&1
-          echo "build exit code: $?"
+          set -euo pipefail
+          uv run --project rewrite --frozen --all-groups python rewrite/build.py 2>&1 | tee build-output.txt
 
-      # 5b) 构建失败时输出详情，便于定位环境差异
-      - name: 输出构建失败详情
+      - name: 独立核对新版归档与校验文件
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        shell: bash
+        run: |
+          uv run --project rewrite --frozen --all-groups python - <<'PY'
+          import hashlib
+          from pathlib import Path
+          import runpy
+          import zipfile
+
+          build = runpy.run_path("rewrite/build.py")
+          output = build["OUTPUT"]
+          archive = output / "BeWaterTG-win64.zip"
+          with zipfile.ZipFile(archive) as source:
+              build["verify_members"](source.namelist())
+              assert source.testzip() is None, "ZIP CRC 检查失败"
+              assert source.read("BeWaterTG/README.md") == Path("README.md").read_bytes()
+              for name in ("app.js", "app.css"):
+                  assert source.read("BeWaterTG/_internal/static/" + name) == Path("rewrite/static", name).read_bytes()
+          checksum = hashlib.sha256(archive.read_bytes()).hexdigest()
+          assert (output / "SHA256SUMS.txt").read_text().split()[0] == checksum
+          print("新版ZIP、操作指南、正式前端与SHA256独立核对通过：", checksum)
+          PY
+
+      - name: 输出构建失败摘要
         if: failure()
         shell: bash
         run: |
-          grep -iE "error|failed|traceback|exception|Traceback|ERROR|FAILED" build-output.txt | head -40 | while IFS= read -r line; do
-            echo "::error title=build::${line}"
-          done
-          {
-            echo "## 构建失败详情"
-            echo '```'
-            tail -200 build-output.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [ -f build-output.txt ]; then
+            {
+              echo '## 新版构建日志'
+              echo '```'
+              tail -100 build-output.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-      # 6) 独立审计发布归档（与构建脚本解耦，二次校验归档成员与敏感内容）
-      - name: 独立审计发布归档
-        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
-        run: uv run python scripts/verify_release.py dist/BeWaterTG-win64.zip
-
-      # 7) 读取 SHA-256 校验值，供 Draft Release 正文引用
-      - name: 读取 SHA-256 校验值
-        if: github.ref_type == 'tag'
-        id: checksum
-        shell: bash
-        run: echo "sha256=$(cat dist/SHA256SUMS.txt)" >> "$GITHUB_OUTPUT"
-
-      # 8) 标签触发时创建 Draft Release：draft:true 表示不自动发布，
-      #    由人工验证构建与 smoke 结果后再手动公开。
-      - name: 创建草稿 Release（人工验证后发布）
+      # 只创建预发布草稿；版本名只作Action字符串输入，不拼入shell。
+      # 必须实际下载核验后，再由维护者公开。
+      - name: 创建新版预发布草稿
         if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v3
         with:
+          name: Be Water TG ${{ github.ref_name }}
           draft: true
+          prerelease: true
+          make_latest: "false"
+          fail_on_unmatched_files: true
           files: |
-            dist/BeWaterTG-win64.zip
-            dist/SHA256SUMS.txt
+            .hermes/rewrite/release/BeWaterTG-win64.zip
+            .hermes/rewrite/release/SHA256SUMS.txt
           body: |
-            # Be Water TG v1.0.1 发布验证产物
+            新版中文任务板与受限自动参与的预发布候选。
 
-            **SHA-256 校验（详见附件 dist/SHA256SUMS.txt）：**
-
-            ```
-            ${{ steps.checksum.outputs.sha256 }}
-            ```
-
-            本 Release 为自动创建的**草稿（Draft）**，尚未公开。
-            请人工验证构建与 smoke 结果后，再手动发布。
+            此处暂为草稿；安装包已完成云端新旧测试、隔离启动和归档审计，仍需维护者下载并独立启动核验后才公开。
+            这不代表真实 Telegram／AI 或生产迁移验收通过。旧版测试的相对路径写库风险与本机旧库保护差异仍须如实保留。

@@ -1,73 +1,104 @@
-# Be Water TG 新版
+# Be Water TG 新版源码（v2）
 
-本机中文 Web 控制台：在明确许可的群中自然参与讨论，按群独立选择签到与受限抽奖。新版业务和前端位于 `rewrite/`，不调用旧版 `src/` 或 `ui/` 业务流程。
+新版业务与中文控制台都在本目录；根目录的 `main.py`、`run.bat`、`src/`、`ui/` 属于旧版，不是这里的新入口。
 
-## 当前源码状态
+**首次下载、安装、配置、升级和排障请看[根目录 README](../README.md)。** 本文只面向源码运行、测试和构建。
 
-2026-10-23 同步的源码包含 C「轻量任务板」界面，以及消息文件保存绑定、查看与确认分离、全局日志归属、恢复提示和后台常驻说明的修复。本次只同步源码，不更新 ZIP／EXE 发布包；已有安装包不能视为包含这些改动。
+## 当前状态
 
-匿名功能回归已执行，但真实 Telegram／AI 业务、生产迁移尚未验收。旧版回归同时暴露默认相对路径写库的隔离漏洞，出现本机旧库保护差异，业务影响尚未对账；不能将功能测试通过视为数据保护或生产验收通过。旧版测试应在不含真实运行数据的干净副本中执行。
+- 当前源码用于预发布 `v2.0.0-rc.1`；程序内部版本仍是 `2.0.0`（`bewater/models.py` 的 `VERSION`）。
+- 只做过离线测试、浏览器流程和隔离数据目录下的 Windows EXE 冒烟；真实 Telegram/AI 动作与生产数据迁移尚未验收。
+- 旧版测试会用默认相对路径 `state/be_water.db` 写库。不要在含真实 `.env`、session、数据库的目录运行旧版测试；本机源码目录的旧库已出现保护差异，业务影响尚未只读对账。
+
+## 目录
+
+```text
+rewrite/
+├── main.py                 本机 Waitress 入口：单实例锁、日志、升级准备
+├── bewater/
+│   ├── app.py              Flask 路由、配置读写、快照与安全头
+│   ├── runtime.py          任务线程、启动/暂停/停止、认证挑战
+│   ├── engine.py           三业务调度、统一外发门禁、额度与恢复
+│   ├── config.py           settings.json 校验、版本保护、旧 .env 导入
+│   ├── store.py            SQLite 表、预留、审计、抽奖与清理
+│   ├── telegram.py         Telethon 适配、身份解析、动作执行
+│   ├── conversation.py     普通参与候选与冷场判断
+│   ├── lottery.py          扫描、发现、复核与受限执行
+│   ├── policy.py           概率、安全暂停、抽奖白名单与截止解析
+│   ├── content.py          AI 请求边界与 TXT 消息库
+│   ├── upgrade.py          升级准备与消息导入
+│   ├── runtime_migration.py 旧运行数据迁移与阻断
+│   └── legacy.py           旧 SQLite 事实导入
+├── templates/index.html    七个中文页面
+├── static/app.js|app.css   控制台前端
+├── tests/                  匿名 pytest 与浏览器回归脚本
+├── build.py                Windows 目录 EXE、ZIP、SHA256SUMS 与回环冒烟
+├── compare.py              新旧同口径反例（需要旧版源码）
+├── pyproject.toml          runtime/dev/build 三组依赖，Python >=3.11,<3.12
+└── uv.lock                 独立锁文件
+```
 
 ## 运行
+
+要求：Windows、Python 3.11、[uv](https://docs.astral.sh/uv/)。
+
+```bash
+uv sync --project rewrite --all-groups
+```
 
 在仓库根目录双击 `start-v2.bat`，或执行：
 
 ```bash
-uv sync --all-groups --project rewrite
-uv run --project rewrite --group runtime python rewrite/main.py
+uv run --project rewrite --frozen --group runtime python rewrite/main.py
 ```
 
-浏览器打开 `http://127.0.0.1:5000`。打开页面或保存配置不会连接 Telegram；只有点击“开始”才连接账号。
+浏览器打开 `http://127.0.0.1:5000`。打开页面、保存设置不会连接 Telegram；只有点击“开始”才连接。正式运行时数据固定在 `%LOCALAPPDATA%\BeWaterTG`，与程序目录分离。
 
-现有仓库原入口暂时保留用于新旧对照；正式切换以本轮验收记录为准。不要同时运行两个版本。正式应用与旧版共用 Windows 应用互斥体，后台也有账号/数据库锁。
+不要同时运行新旧两版：正式入口共用 Windows 应用互斥体，后台另有账号/数据库锁。
 
-## 日常使用
+## 测试
 
-1. **连接与设置**：填写 API ID、API Hash、含国际区号的手机号及可选代理。
-2. **授权群与任务**：添加群，逐群确认管理员许可，分别启用聊天、签到、抽奖。新添加群默认不启用签到和抽奖。
-3. **普通参与**：设置问题/讨论概率、冷场阈值、每日额度与候选等待。额度是上限，不会强迫发满。
-4. **AI 与消息库**：AI 可关闭；启用须明确同意文本外发。AI 主动跳过时不强发 TXT；服务失败才降级。消息库一行一条，句中逗号保留。
-5. 点击开始；如有认证挑战，在当前本机页面提交验证码或两步验证密码。认证输入不保存。
-6. 暂停阻止新动作；停止取消等待并断开账号。关闭网页不会停止后台任务，结束自动任务必须先点击“停止”；恢复连接后会重新取快照。
+新版测试全匿名：`tests/conftest.py` 把 `LOCALAPPDATA` 指向临时目录，并拦截真实 socket；Telegram 使用 fake 适配器。
 
-签到失败不阻断普通聊天。明确投诉、管理员警告、限流和数据库失败属于共享保护，不能用另一功能绕过。
-
-## 抽奖边界
-
-只自动执行原消息中唯一明确的 callback、固定顶层短文本或固定回复。文本从原消息原样提取，不由 AI 编造。自由描述、附加条件、外链、关注、加群、转发、私聊、支付、验证码、投票等一律转人工。
-
-自动动作前重读原消息、刷新群和发布者权限、复核截止与全部条件、检查暂停/时段/配额，然后成功预写 SQLite 才提交。callback 结果未知不重试、不退款，只冻结该群抽奖。**已执行不等于中奖。**
-
-“打开原消息”只生成安全链接，不改变提醒或冻结；“标记已查看”只关闭待处理提醒，不会解冻未知结果，也不改变外发记录或额度。恢复冻结需要另行确认。消息库保存绑定实际加载的文件与版本，切换文件被取消或加载失败时仍编辑原文件。清理历史仅停止时可用，按上海发现日期处理，且可能移除部分去重信息。
-
-## 升级和数据
-
-运行数据仍在 `%LOCALAPPDATA%\BeWaterTG`：
-
-- `config/settings.json`：新版完整配置；旧 `config/.env` 不覆盖、不删除。
-- `config/messages/`：安全导入及用户编辑的消息库。
-- `session/sender_session.session`：继续使用原会话位置。
-- `state/be_water.db`：原始旧表保留，新表使用 `bw_` 前缀。
-- `backups/`：升级前一致性 SQLite 备份和无敏感内容的迁移摘要。
-- `logs/bewater-v2.log`：轮转的中文运行摘要，不记录认证输入、API 密钥或 callback 原文。
-
-旧授权群升级后需要重新确认许可；保留任务显式开关，不擅自开启。旧 URL/raw ID 状态在平台群实体确认后保守映射，原始历史不删。旧库缺失发现时间的抽奖不猜测日期，保守延长七日去重并明确标记。安全无法导入的旧消息文件会列入迁移摘要，需在消息库检查，不会访问任意外部路径。
-
-配置运行中保存后，停用开关与撤销 AI 同意立即阻止下一动作/请求；其他参数在停止并重新开始后生效。修改账号、代理或增删群前必须停止。
-
-## 验证
+在仓库根目录执行：
 
 ```bash
-# 新版匿名全集：临时数据目录，禁止真实外部连接
-uv run --project rewrite --group runtime pytest -c rewrite/pytest.ini rewrite/tests -q
-
-# 新旧同口径缺陷反例（需要保留旧版源码与环境）
-uv run --all-groups python rewrite/compare.py
-
-# Windows 完整目录 EXE、ZIP、资源审计及真实回环冒烟
-uv run --project rewrite --all-groups python rewrite/build.py
+uv run --project rewrite --all-groups pytest -c rewrite/pytest.ini rewrite/tests -q
 ```
 
-产物在仓库内 `.hermes/rewrite/release/`。该私有目录同时存在旧版回退资料，**不要整体上传 `.hermes`**；发布仅取已审计 ZIP 与 SHA256SUMS。
+旧版测试不在本目录，且存在默认相对路径写库风险；需要在干净克隆或不含真实运行数据的源码副本中单独执行。
 
-真实 Telegram/AI 测试需要单独授权。匿名测试、浏览器 fake 业务闭环和 EXE 本机启动不证明真实账号已完成业务动作。
+`compare.py` 会同时导入新旧实现，只适合在保留旧版源码和根项目依赖的仓库里跑：
+
+```bash
+uv run --all-groups python rewrite/compare.py
+```
+
+它输出的是几个同口径缺陷反例，不是性能、成熟度或全部功能的基准。
+
+## 构建 Windows 包
+
+```bash
+uv run --project rewrite --frozen --all-groups python rewrite/build.py
+```
+
+构建器只在 Windows 运行，使用 PyInstaller `--onedir`，收集 `templates/`、`static/`、`messages.txt`、`settings.example.json`，随后真实启动 EXE 做隔离冒烟：健康检查（`version` 为 `2.0.0`）、静态资源、第二实例退出、不创建 Telegram session、退出后释放端口。最后生成完整目录、ZIP 和 `SHA256SUMS.txt`。
+
+输出在仓库内私有目录 `.hermes/rewrite/release/`。该目录可能同时存放旧版回退资料和本机验证数据，**不要整体上传或提交**；发布只取审计过的 `BeWaterTG-win64.zip` 与 `SHA256SUMS.txt`。
+
+## 发布流程
+
+推送 `v2.*` 标签会触发 `.github/workflows/windows-release-verify.yml`：在 Windows/Python 3.11 上运行旧版与新版测试、构建新版包并上传为预发布草稿，由维护者核验后再公开。具体步骤和条件以工作流文件为准；CI 结果不代表真实 Telegram/AI 或生产迁移已验收。
+
+## 数据与迁移
+
+- 新版配置写 `config/settings.json`；旧 `config/.env` 只作首次导入来源，不覆盖、不删除。
+- 旧库继续使用 `state/be_water.db`：旧表保留，新增 `bw_` 表；旧授权群需要重新确认许可。
+- 旧自定义数据库路径可能阻断启动，需要人工把旧库复制到固定位置；新版不会自动搬完全部旧状态，也不会生成整目录备份。
+- 降级不能拿升级后的库覆盖旧备份；升级前先停止任务、退出后台并复制整个运行目录。
+
+完整步骤、备份和风险说明见[根目录 README](../README.md)的“从旧版升级”“备份与恢复”。
+
+## 文档边界
+
+`docs/rewrite/` 下的验收记录是历史证据，不是本次 RC 的发布承诺，也不替代真实账号、真实 AI 和生产迁移验证。

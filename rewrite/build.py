@@ -5,7 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import shutil
 import socket
 import subprocess
 import sys
@@ -21,16 +22,20 @@ OUTPUT = ROOT.parent / ".hermes/rewrite/release"
 def verify_members(names: list[str]) -> None:
     """禁止真实配置、会话、数据库、日志或开发文件进入发布包。"""
     for name in names:
-        parts = Path(name).parts
-        suffix = Path(name).suffix.lower()
+        path = PurePosixPath(name.replace("\\", "/"))
+        parts = tuple(part.lower() for part in path.parts)
+        if not parts or path.is_absolute() or ".." in parts or ":" in name or "\0" in name:
+            raise RuntimeError("发布包含不安全路径：" + name)
         if any(
             p in {".env", "settings.json", ".git", ".hermes", "tests", "logs", "state", "session"}
+            or (p.startswith(".env.") and p != ".env.example")
             for p in parts
         ):
             raise RuntimeError("发布包含禁止文件：" + name)
-        if suffix in {".db", ".sqlite", ".session", ".log", ".journal"} or name.endswith(
-            "session-journal"
-        ):
+        if parts[-1].endswith((
+            ".db", ".db-wal", ".db-shm", ".sqlite", ".sqlite3", ".sqlite-wal", ".sqlite-shm",
+            ".session", ".session-journal", ".session-wal", ".session-shm", ".log", ".journal",
+        )):
             raise RuntimeError("发布包含运行数据：" + name)
 
 
@@ -69,6 +74,9 @@ def smoke(executable: Path) -> dict[str, object]:
             ):
                 if marker not in get(port, route)[0]:
                     raise RuntimeError("发布资源缺失：" + route)
+            for resource in ("static/app.js", "static/app.css"):
+                if get(port, "/" + resource)[0] != (ROOT / resource).read_bytes():
+                    raise RuntimeError("发布资源与当前源码不一致：" + resource)
             second = subprocess.run(
                 args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=15
             )
@@ -96,6 +104,7 @@ def smoke(executable: Path) -> dict[str, object]:
         return {
             "health": health,
             "static_resources": True,
+            "static_matches_source": True,
             "second_instance_exits": True,
             "no_telegram_session": True,
             "port_released_after_termination": True,
@@ -143,6 +152,7 @@ def main() -> None:
     command.append(str(ROOT / "main.py"))
     subprocess.run(command, cwd=ROOT, check=True)
     bundle = OUTPUT / "dist/BeWaterTG"
+    shutil.copyfile(ROOT.parent / "README.md", bundle / "README.md")
     paths = [p for p in bundle.rglob("*") if p.is_file()]
     names = [p.relative_to(bundle.parent).as_posix() for p in paths]
     verify_members(names)
@@ -155,6 +165,8 @@ def main() -> None:
         verify_members(source.namelist())
         if source.testzip() is not None:
             raise RuntimeError("ZIP CRC 检查失败")
+        if source.read("BeWaterTG/README.md") != (ROOT.parent / "README.md").read_bytes():
+            raise RuntimeError("安装包缺少与当前源码一致的操作指南")
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     (OUTPUT / "SHA256SUMS.txt").write_text(digest + "  " + archive.name + "\n", encoding="utf-8")
     report = {
@@ -162,6 +174,7 @@ def main() -> None:
         "sha256": digest,
         "files": len(paths),
         "zip_crc_valid": True,
+        "readme_included": True,
         "smoke": result,
     }
     (OUTPUT / "build-result.json").write_text(
