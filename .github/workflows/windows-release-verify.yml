@@ -16,6 +16,8 @@ jobs:
   build-and-verify:
     name: 新旧测试与新版发布验证 (Windows / Python 3.11)
     runs-on: windows-latest
+    env:
+      PYTHONIOENCODING: utf-8
     steps:
       - name: 检出对应提交
         uses: actions/checkout@v4
