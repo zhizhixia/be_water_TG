@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 import time
 
 import pytest
@@ -23,6 +27,17 @@ def wait_until(predicate, seconds=5):
             return
         time.sleep(0.02)
     raise AssertionError("后台未在时限内到达预期状态")
+
+
+def test_cli_chinese_output_survives_western_encoding():
+    """真实入口在英文控制台编码下仍输出UTF-8，不因中文帮助或启动信息崩溃。"""
+    environment = dict(os.environ, PYTHONIOENCODING="cp1252")
+    result = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve().parents[1] / "main.py"), "--help"],
+        env=environment, capture_output=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stderr.decode("utf-8", errors="replace")
+    assert "Be Water TG 本机控制台" in result.stdout.decode("utf-8")
 
 
 def test_actual_web_start_auth_pause_resume_stop(setup, paths):

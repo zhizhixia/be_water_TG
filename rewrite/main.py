@@ -107,6 +107,10 @@ def run(port: int = 5000, isolated_data: str | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # 英文Windows或重定向输出可能默认cp1252，中文启动信息不能因此终止服务。
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="backslashreplace")
     parser = argparse.ArgumentParser(description="Be Water TG 本机控制台")
     parser.add_argument("--port", type=int, default=5000)
     parser.add_argument("--isolated-data-dir", help="验证专用隔离数据目录，不用于切换真实账号")

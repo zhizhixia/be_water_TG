@@ -59,7 +59,11 @@ def smoke(executable: Path) -> dict[str, object]:
             health = None
             for _ in range(120):
                 if process.poll() is not None:
-                    raise RuntimeError("EXE 在就绪前退出")
+                    log.flush()
+                    details = (Path(temporary) / "process-output.txt").read_text(
+                        encoding="utf-8", errors="replace"
+                    )
+                    raise RuntimeError("EXE 在就绪前退出：\n" + details[-4000:])
                 try:
                     health = json.loads(get(port, "/api/health")[0])
                     break

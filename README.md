@@ -1,15 +1,15 @@
-# Be Water TG（v2.0.0-rc.1 预发布）
+# Be Water TG（v2.0.0-rc.2 预发布）
 
 面向**已取得群管理员明确许可**的 Telegram 群的本机辅助工具：低频参与讨论、每日签到、按明确规则参与抽奖，并提供一个只在本机打开的中文控制台。
 
 > **这是预发布，不是稳定版。**
-> 本版本对应 GitHub 标签 `v2.0.0-rc.1` 的 Release，发布时勾选为预发布（prerelease）。仓库当前的 Latest 仍是旧版 `v1.0.1`，不要下错。
-> 程序内部版本号仍是 `2.0.0`，控制台页脚显示的也是它；“rc.1”只表示这次发布是候选版。
+> 本版本对应 GitHub 标签 `v2.0.0-rc.2` 的 Release，发布时勾选为预发布（prerelease）。仓库当前的 Latest 仍是旧版 `v1.0.1`，不要下错。
+> 程序内部版本号仍是 `2.0.0`，控制台页脚显示的也是它；“rc.2”只表示这次发布是候选版。
 > 真实 Telegram 登录与群内动作、真实 AI 服务、生产数据迁移都还没有验收。本 RC 不代表这些事项已经通过。
 
 ## 先看：去哪里下载
 
-- 发布页：<https://github.com/zhizhixia/be_water_TG/releases/tag/v2.0.0-rc.1>
+- 发布页：<https://github.com/zhizhixia/be_water_TG/releases/tag/v2.0.0-rc.2>
 - 只认两个附件：`BeWaterTG-win64.zip`（完整 Windows 程序）和 `SHA256SUMS.txt`（校验值）。
 - **不要下载 GitHub 自动生成的 “Source code (zip / tar.gz)”**，那是源码快照，不能直接运行。
 - **不要点仓库首页的 Latest `v1.0.1`**，那是旧版。
